@@ -99,7 +99,7 @@ func (g *Commands) PullMatches() (err error) {
 
 		ccl, cErr := g.byRemoteResolve(relToRoot, fsPath, match, false)
 		if cErr != nil {
-			continue
+			return cErr
 		}
 
 		cl = append(cl, ccl...)

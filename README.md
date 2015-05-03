@@ -24,6 +24,7 @@
   - [Touching](#touch)
   - [Trashing and Untrashing](#trashing-and-untrashing)
   - [Emptying the Trash](#emptying-the-trash)
+  - [Deleting](#deleting)
   - [Listing Files](#listing-files)
   - [Stating Files](#stating-files)
   - [Quota](#quota)
@@ -56,7 +57,13 @@ To install from the latest source, run:
 $ go get -u github.com/odeke-em/drive/cmd/drive
 ```
 
-Binary releases for tagged versions are also [available](https://github.com/odeke-em/drive/releases).
+Otherwise:
+
+* In order to address [issue #138](https://github.com/odeke-em/drive/issues/138), where debug information should be bundled with the binary, you'll need to run:
+
+```shell
+$ go get github.com/odeke-em/drive/drive-gen && drive-gen
+```
 
 ### Platform Packages
 
@@ -108,11 +115,17 @@ To pull specific files or directories, pass in one or more paths:
 $ drive pull photos/img001.png docs
 ```
 
-Note: To ignore checksum verification during a pull:
 
-```shell
-$ drive pull -ignore-checksum
-```
+## Note: Checksum verification:
+    * By default checksum-ing is turned off because it was deemed to be quite vigorous and unnecessary for most cases.
+    * Due to popular demand to cover the common case in which size + modTime differences are sufficient to detect file changes. The discussion stemmed from issue [#117](https://github.com/odeke-em/drive/issues/117).
+
+    To turn checksum verification back on:
+
+    ```shell
+    $ drive pull -ignore-checksum=false
+    ```
+
 
 drive also supports piping pulled content to stdout which can be accomplished by:
 
@@ -168,6 +181,7 @@ $ drive push -piped path
 ```
 
 + Note:
+  * In relation to [#107](https://github.com/odeke-em/drive/issues/107) and numerous other issues related to confusion about clashing paths, drive will abort on trying to deal with clashing names. To turn off this safety, pass in flag `--ignore-name-clash`.
   * In relation to [#57](https://github.com/odeke-em/drive/issues/57) and [@rakyll's #49](https://github.com/rakyll/drive/issues/49).
    A couple of scenarios in which data was getting totally clobbered and unrecoverable, drive now tries to play it safe and warn you if your data could potentially be lost e.g during a to-disk clobber for which you have no backup. At least with a push you have the luxury of untrashing content. To disable this safety, run drive with flag `-ignore-conflict` e.g:
 
@@ -223,12 +237,22 @@ $ drive features
 
 ## Note:
 
-MimeType inference is from the file's extension.
++ MimeType inference is from the file's extension.
 
-If you would like to coerce a certain mimeType that you'd prefer to assert with Google Drive pushes, use flag `-coerce-mime <short-key>`
+  If you would like to coerce a certain mimeType that you'd prefer to assert with Google Drive pushes, use flag `-coerce-mime <short-key>`
 
 ```shell
 $ drive push -coerce-mime docx my_test_doc
+```
+
++ Excluding certain operations can be done both for pull and push by passing in flag
+`--exclude-ops` <csv_crud_values>
+
+e.g
+
+```shell
+$ drive pull --exclude-ops "delete,update" vines
+$ drive push --exclude-ops "create" sensitive_files
 ```
 
 ### Publishing
@@ -319,6 +343,19 @@ Emptying the trash will permanently delete all trashed files. They will be unrec
 ```shell
 $ drive emptytrash
 ```
+
+### Deleting
+
+Deleting items will PERMANENTLY remove the items from your drive. This operation is irreversible.
+
+```shell
+$ drive delete flux.mp4
+```
+
+```shell
+$ drive delete --matches onyx swp
+```
+
 
 ### Listing Files
 

@@ -39,7 +39,6 @@ const (
 )
 
 func (g *Commands) About(mask int) (err error) {
-	defer PrintVersion()
 	if mask == AboutNone {
 		return nil
 	}

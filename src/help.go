@@ -16,14 +16,13 @@ package drive
 
 import (
 	"fmt"
-
-	"github.com/odeke-em/xon/pkger/src"
 )
 
 const (
 	AboutKey      = "about"
 	AllKey        = "all"
 	CopyKey       = "copy"
+	DeleteKey     = "delete"
 	DiffKey       = "diff"
 	EmptyTrashKey = "emptytrash"
 	FeaturesKey   = "features"
@@ -51,6 +50,7 @@ const (
 	ForceKey          = "force"
 	QuietKey          = "quiet"
 	QuitShortKey      = "q"
+	YesShortKey       = "Y"
 	QuitLongKey       = "quit"
 	DriveRepoRelPath  = "github.com/odeke-em/drive"
 )
@@ -59,8 +59,10 @@ const (
 	DescAbout          = "print out information about your Google drive"
 	DescAll            = "print out the entire help section"
 	DescCopy           = "copy remote paths to a destination"
+	DescDelete         = "deletes the items permanently. This operation is irreversible"
 	DescDiff           = "compares local files with their remote equivalent"
 	DescEmptyTrash     = "permanently cleans out your trash"
+	DescExcludeOps     = "exclude operations"
 	DescFeatures       = "returns information about the features of your drive"
 	DescHelp           = "Get help for a topic"
 	DescInit           = "initializes a directory and authenticates user"
@@ -84,12 +86,15 @@ const (
 	DescIgnoreChecksum = "avoids computation of checksums as a final check." +
 		"\nUse cases may include:\n\t* when you are low on bandwidth e.g SSHFS." +
 		"\n\t* Are on a low power device"
-	DescIgnoreConflict = "turns off the conflict resolution safety"
+	DescIgnoreConflict    = "turns off the conflict resolution safety"
+	DescIgnoreNameClashes = "ignore name clashes"
 )
 
 const (
-	CLIOptionIgnoreChecksum = "ignore-checksum"
-	CLIOptionIgnoreConflict = "ignore-conflict"
+	CLIOptionIgnoreChecksum    = "ignore-checksum"
+	CLIOptionIgnoreConflict    = "ignore-conflict"
+	CLIOptionIgnoreNameClashes = "ignore-name-clashes"
+	CLIOptionExcludeOperations = "exclude-ops"
 )
 
 var skipChecksumNote = fmt.Sprintf(
@@ -101,6 +106,9 @@ var docMap = map[string][]string{
 	},
 	CopyKey: []string{
 		DescCopy,
+	},
+	DeleteKey: []string{
+		DescDelete,
 	},
 	DiffKey: []string{
 		DescDiff, "Accepts multiple remote paths for line by line comparison",
@@ -193,20 +201,12 @@ func ShowAllDescriptions() {
 	}
 }
 
-func PrintVersion() {
-	fmt.Printf("drive version %s", Version)
-	pkgInfo, err := pkger.Recon(DriveRepoRelPath)
-	if err == nil && pkgInfo != nil {
-		fmt.Printf("\n%s", pkgInfo)
-	}
-	fmt.Println()
-}
-
 func ShowDescription(topic string) {
 	if topic == AllKey {
 		ShowAllDescriptions()
 		return
 	}
+
 	help, ok := docMap[topic]
 	if !ok {
 		fmt.Printf("Unkown command '%s' type `drive help all` for entire usage documentation\n", topic)

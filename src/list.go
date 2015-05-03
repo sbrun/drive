@@ -165,33 +165,37 @@ func (f *File) pretty(logy *log.Logger, opt attribute) {
 	fmtdPath := sepJoin("/", opt.parent, f.Name)
 
 	if opt.minimal {
-		logy.Logln(fmtdPath)
-		if owners(opt.mask) && len(f.OwnerNames) >= 1 {
-			logy.Logf(" %s ", strings.Join(f.OwnerNames, " & "))
+		logy.Logf("%s ", fmtdPath)
+	} else {
+		if f.IsDir {
+			logy.Logf("d")
+		} else {
+			logy.Logf("-")
 		}
-		return
-	}
+		if f.Shared {
+			logy.Logf("s")
+		} else {
+			logy.Logf("-")
+		}
 
-	if f.IsDir {
-		logy.Logf("d")
-	} else {
-		logy.Logf("-")
-	}
-	if f.Shared {
-		logy.Logf("s")
-	} else {
-		logy.Logf("-")
-	}
-
-	if f.UserPermission != nil {
-		logy.Logf(" %-10s ", f.UserPermission.Role)
+		if f.UserPermission != nil {
+			logy.Logf(" %-10s ", f.UserPermission.Role)
+		}
 	}
 
 	if owners(opt.mask) && len(f.OwnerNames) >= 1 {
 		logy.Logf(" %s ", strings.Join(f.OwnerNames, " & "))
 	}
 
-	logy.Logf(" %-10s\t%-10s\t\t%-20s\t%-50s\n", prettyBytes(f.Size), f.Id, f.ModTime, fmtdPath)
+	if version(opt.mask) {
+		logy.Logf(" v%d", f.Version)
+	}
+
+	if !opt.minimal {
+		logy.Logf(" %-10s\t%-10s\t\t%-20s\t%-50s\n", prettyBytes(f.Size), f.Id, f.ModTime, fmtdPath)
+	} else {
+		logy.Logln()
+	}
 }
 
 func (g *Commands) breadthFirst(travSt traversalSt, spin *playable) bool {

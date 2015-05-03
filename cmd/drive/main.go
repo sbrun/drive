@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/odeke-em/drive/config"
+	"github.com/odeke-em/drive/gen"
 	"github.com/odeke-em/drive/src"
 	"github.com/rakyll/command"
 )
@@ -71,6 +72,7 @@ func main() {
 	bindCommandWithAliases(drive.TouchKey, drive.DescTouch, &touchCmd{}, []string{})
 	bindCommandWithAliases(drive.TrashKey, drive.DescTrash, &trashCmd{}, []string{})
 	bindCommandWithAliases(drive.UntrashKey, drive.DescUntrash, &untrashCmd{}, []string{})
+	bindCommandWithAliases(drive.DeleteKey, drive.DescDelete, &deleteCmd{}, []string{})
 	bindCommandWithAliases(drive.UnpubKey, drive.DescUnpublish, &unpublishCmd{}, []string{})
 	bindCommandWithAliases(drive.VersionKey, drive.Version, &versionCmd{}, []string{})
 	command.ParseAndRun()
@@ -114,7 +116,7 @@ func (cmd *versionCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 }
 
 func (cmd *versionCmd) Run(args []string) {
-	drive.PrintVersion()
+	fmt.Printf("drive version: %s\n%s\n", drive.Version, generated.PkgInfo)
 	exitWithError(nil)
 }
 
@@ -261,18 +263,20 @@ func (cmd *statCmd) Run(args []string) {
 }
 
 type pullCmd struct {
-	exportsDir     *string
-	export         *string
-	force          *bool
-	hidden         *bool
-	matches        *bool
-	noPrompt       *bool
-	noClobber      *bool
-	recursive      *bool
-	ignoreChecksum *bool
-	ignoreConflict *bool
-	piped          *bool
-	quiet          *bool
+	exportsDir        *string
+	export            *string
+	excludeOps        *string
+	force             *bool
+	hidden            *bool
+	matches           *bool
+	noPrompt          *bool
+	noClobber         *bool
+	recursive         *bool
+	ignoreChecksum    *bool
+	ignoreConflict    *bool
+	piped             *bool
+	quiet             *bool
+	ignoreNameClashes *bool
 }
 
 func (cmd *pullCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
@@ -283,12 +287,14 @@ func (cmd *pullCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.noPrompt = fs.Bool("no-prompt", false, "shows no prompt before applying the pull action")
 	cmd.hidden = fs.Bool("hidden", false, "allows pulling of hidden paths")
 	cmd.force = fs.Bool("force", false, "forces a pull even if no changes present")
-	cmd.ignoreChecksum = fs.Bool(drive.CLIOptionIgnoreChecksum, false, drive.DescIgnoreChecksum)
+	cmd.ignoreChecksum = fs.Bool(drive.CLIOptionIgnoreChecksum, true, drive.DescIgnoreChecksum)
 	cmd.ignoreConflict = fs.Bool(drive.CLIOptionIgnoreConflict, false, drive.DescIgnoreConflict)
+	cmd.ignoreNameClashes = fs.Bool(drive.CLIOptionIgnoreNameClashes, false, drive.DescIgnoreNameClashes)
 	cmd.exportsDir = fs.String("export-dir", "", "directory to place exports")
 	cmd.matches = fs.Bool("matches", false, "search by prefix")
 	cmd.piped = fs.Bool("piped", false, "if true, read content from stdin")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.excludeOps = fs.String(drive.CLIOptionExcludeOperations, "", drive.DescExcludeOps)
 
 	return fs
 }
@@ -307,23 +313,31 @@ func (cmd *pullCmd) Run(args []string) {
 		_, context, path = preprocessArgs([]string{cwd})
 	}
 
+	excludes := drive.NonEmptyTrimmedStrings(strings.Split(*cmd.excludeOps, ",")...)
+	excludeCrudMask := drive.CrudAtoi(excludes...)
+	if excludeCrudMask == drive.AllCrudOperations {
+		exitWithError(fmt.Errorf("all CRUD operations forbidden"))
+	}
+
 	// Filter out empty strings.
-	exports := drive.NonEmptyStrings(strings.Split(*cmd.export, ",")...)
+	exports := drive.NonEmptyTrimmedStrings(strings.Split(*cmd.export, ",")...)
 
 	options := &drive.Options{
-		Exports:        uniqOrderedStr(exports),
-		ExportsDir:     strings.Trim(*cmd.exportsDir, " "),
-		Force:          *cmd.force,
-		Hidden:         *cmd.hidden,
-		IgnoreChecksum: *cmd.ignoreChecksum,
-		IgnoreConflict: *cmd.ignoreConflict,
-		NoPrompt:       *cmd.noPrompt,
-		NoClobber:      *cmd.noClobber,
-		Path:           path,
-		Recursive:      *cmd.recursive,
-		Sources:        sources,
-		Piped:          *cmd.piped,
-		Quiet:          *cmd.quiet,
+		Exports:           uniqOrderedStr(exports),
+		ExportsDir:        strings.Trim(*cmd.exportsDir, " "),
+		Force:             *cmd.force,
+		Hidden:            *cmd.hidden,
+		IgnoreChecksum:    *cmd.ignoreChecksum,
+		IgnoreConflict:    *cmd.ignoreConflict,
+		NoPrompt:          *cmd.noPrompt,
+		NoClobber:         *cmd.noClobber,
+		Path:              path,
+		Recursive:         *cmd.recursive,
+		Sources:           sources,
+		Piped:             *cmd.piped,
+		Quiet:             *cmd.quiet,
+		IgnoreNameClashes: *cmd.ignoreNameClashes,
+		ExcludeCrudMask:   excludeCrudMask,
 	}
 
 	if *cmd.matches {
@@ -348,11 +362,13 @@ type pushCmd struct {
 	convert *bool
 	// ocr when set indicates that Optical Character Recognition should be
 	// attempted on .[gif, jpg, pdf, png] uploads
-	ocr            *bool
-	ignoreChecksum *bool
-	ignoreConflict *bool
-	quiet          *bool
-	coercedMimeKey *string
+	ocr               *bool
+	ignoreChecksum    *bool
+	ignoreConflict    *bool
+	ignoreNameClashes *bool
+	quiet             *bool
+	coercedMimeKey    *string
+	excludeOps        *string
 }
 
 func (cmd *pushCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
@@ -365,10 +381,12 @@ func (cmd *pushCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.convert = fs.Bool("convert", false, "toggles conversion of the file to its appropriate Google Doc format")
 	cmd.ocr = fs.Bool("ocr", false, "if true, attempt OCR on gif, jpg, pdf and png uploads")
 	cmd.piped = fs.Bool("piped", false, "if true, read content from stdin")
-	cmd.ignoreChecksum = fs.Bool(drive.CLIOptionIgnoreChecksum, false, drive.DescIgnoreChecksum)
+	cmd.ignoreChecksum = fs.Bool(drive.CLIOptionIgnoreChecksum, true, drive.DescIgnoreChecksum)
 	cmd.ignoreConflict = fs.Bool(drive.CLIOptionIgnoreConflict, false, drive.DescIgnoreConflict)
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
 	cmd.coercedMimeKey = fs.String(drive.CoercedMimeKeyKey, "", "the mimeType you are trying to coerce this file to be")
+	cmd.ignoreNameClashes = fs.Bool(drive.CLIOptionIgnoreNameClashes, false, drive.DescIgnoreNameClashes)
+	cmd.excludeOps = fs.String(drive.CLIOptionExcludeOperations, "", drive.DescExcludeOps)
 	return fs
 }
 
@@ -437,21 +455,29 @@ func (cmd *pushCmd) createPushOptions() *drive.Options {
 	}
 
 	meta := map[string][]string{
-		drive.CoercedMimeKeyKey: drive.NonEmptyStrings(*cmd.coercedMimeKey),
+		drive.CoercedMimeKeyKey: drive.NonEmptyTrimmedStrings(*cmd.coercedMimeKey),
+	}
+
+	excludes := drive.NonEmptyTrimmedStrings(strings.Split(*cmd.excludeOps, ",")...)
+	excludeCrudMask := drive.CrudAtoi(excludes...)
+	if excludeCrudMask == drive.AllCrudOperations {
+		exitWithError(fmt.Errorf("all CRUD operations forbidden yet asking to push"))
 	}
 
 	return &drive.Options{
-		Force:          *cmd.force,
-		Hidden:         *cmd.hidden,
-		IgnoreChecksum: *cmd.ignoreChecksum,
-		IgnoreConflict: *cmd.ignoreConflict,
-		NoClobber:      *cmd.noClobber,
-		NoPrompt:       *cmd.noPrompt,
-		Recursive:      *cmd.recursive,
-		Piped:          *cmd.piped,
-		Quiet:          *cmd.quiet,
-		Meta:           &meta,
-		TypeMask:       mask,
+		Force:             *cmd.force,
+		Hidden:            *cmd.hidden,
+		IgnoreChecksum:    *cmd.ignoreChecksum,
+		IgnoreConflict:    *cmd.ignoreConflict,
+		NoClobber:         *cmd.noClobber,
+		NoPrompt:          *cmd.noPrompt,
+		Recursive:         *cmd.recursive,
+		Piped:             *cmd.piped,
+		Quiet:             *cmd.quiet,
+		Meta:              &meta,
+		TypeMask:          mask,
+		ExcludeCrudMask:   excludeCrudMask,
+		IgnoreNameClashes: *cmd.ignoreNameClashes,
 	}
 }
 
@@ -540,7 +566,7 @@ type diffCmd struct {
 
 func (cmd *diffCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.hidden = fs.Bool("hidden", false, "allows pulling of hidden paths")
-	cmd.ignoreChecksum = fs.Bool(drive.CLIOptionIgnoreChecksum, false, drive.DescIgnoreChecksum)
+	cmd.ignoreChecksum = fs.Bool(drive.CLIOptionIgnoreChecksum, true, drive.DescIgnoreChecksum)
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
 	return fs
 }
@@ -599,6 +625,39 @@ func (cmd *emptyTrashCmd) Run(args []string) {
 		NoPrompt: *cmd.noPrompt,
 		Quiet:    *cmd.quiet,
 	}).EmptyTrash())
+}
+
+type deleteCmd struct {
+	hidden  *bool
+	matches *bool
+	quiet   *bool
+}
+
+func (cmd *deleteCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
+	cmd.hidden = fs.Bool("hidden", false, "allows trashing hidden paths")
+	cmd.matches = fs.Bool("matches", false, "search by prefix and trash")
+	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	return fs
+}
+
+func (cmd *deleteCmd) Run(args []string) {
+	if !*cmd.matches {
+		sources, context, path := preprocessArgs(args)
+		exitWithError(drive.New(context, &drive.Options{
+			Path:    path,
+			Sources: sources,
+			Quiet:   *cmd.quiet,
+		}).Delete())
+	} else {
+		cwd, err := os.Getwd()
+		exitWithError(err)
+		_, context, path := preprocessArgs([]string{cwd})
+		exitWithError(drive.New(context, &drive.Options{
+			Path:    path,
+			Sources: args,
+			Quiet:   *cmd.quiet,
+		}).DeleteByMatch())
+	}
 }
 
 type trashCmd struct {
@@ -723,7 +782,7 @@ func (cmd *unshareCmd) Run(args []string) {
 	sources, context, path := preprocessArgs(args)
 
 	meta := map[string][]string{
-		"accountType": uniqOrderedStr(drive.NonEmptyStrings(strings.Split(*cmd.accountType, ",")...)),
+		"accountType": uniqOrderedStr(drive.NonEmptyTrimmedStrings(strings.Split(*cmd.accountType, ",")...)),
 	}
 
 	exitWithError(drive.New(context, &drive.Options{
@@ -807,9 +866,9 @@ func (cmd *shareCmd) Run(args []string) {
 
 	meta := map[string][]string{
 		"emailMessage": []string{*cmd.message},
-		"emails":       uniqOrderedStr(drive.NonEmptyStrings(strings.Split(*cmd.emails, ",")...)),
-		"role":         uniqOrderedStr(drive.NonEmptyStrings(strings.Split(*cmd.role, ",")...)),
-		"accountType":  uniqOrderedStr(drive.NonEmptyStrings(strings.Split(*cmd.accountType, ",")...)),
+		"emails":       uniqOrderedStr(drive.NonEmptyTrimmedStrings(strings.Split(*cmd.emails, ",")...)),
+		"role":         uniqOrderedStr(drive.NonEmptyTrimmedStrings(strings.Split(*cmd.role, ",")...)),
+		"accountType":  uniqOrderedStr(drive.NonEmptyTrimmedStrings(strings.Split(*cmd.accountType, ",")...)),
 	}
 
 	mask := drive.NoopOnShare

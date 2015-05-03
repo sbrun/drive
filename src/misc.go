@@ -133,21 +133,39 @@ func isHidden(p string, ignore bool) bool {
 	return false
 }
 
+func prompt(r *os.File, w *os.File, promptText ...interface{}) (input string) {
+
+	fmt.Fprint(w, promptText...)
+
+	flushTTYin()
+
+	fmt.Fscanln(r, &input)
+	return
+}
+
 func nextPage() bool {
-	var input string
-	fmt.Printf("---More---")
-	fmt.Scanln(&input)
+	input := prompt(os.Stdin, os.Stdout, "---More---")
 	if len(input) >= 1 && strings.ToLower(input[:1]) == QuitShortKey {
 		return false
 	}
 	return true
 }
 
-func promptForChanges() bool {
-	input := "Y"
-	fmt.Print("Proceed with the changes? [Y/n]: ")
-	fmt.Scanln(&input)
-	return strings.ToUpper(input) == "Y"
+func promptForChanges(args ...interface{}) bool {
+	argv := []interface{}{
+		"Proceed with the changes? [Y/n]:",
+	}
+	if len(args) >= 1 {
+		argv = args
+	}
+
+	input := prompt(os.Stdin, os.Stdout, argv...)
+
+	if input == "" {
+		input = YesShortKey
+	}
+
+	return strings.ToUpper(input) == YesShortKey
 }
 
 func (f *File) toDesktopEntry(urlMExt *urlMimeTypeExt) *desktopEntry {
@@ -275,13 +293,24 @@ func chunkInt64(v int64) chan int {
 	return chunks
 }
 
-func NonEmptyStrings(v ...string) (splits []string) {
+func nonEmptyStrings(fn func(string) string, v ...string) (splits []string) {
 	for _, elem := range v {
+		if fn != nil {
+			elem = fn(elem)
+		}
 		if elem != "" {
 			splits = append(splits, elem)
 		}
 	}
 	return
+}
+
+func NonEmptyStrings(v ...string) (splits []string) {
+	return nonEmptyStrings(nil, v...)
+}
+
+func NonEmptyTrimmedStrings(v ...string) (splits []string) {
+	return nonEmptyStrings(strings.TrimSpace, v...)
 }
 
 var regExtStrMap = map[string]string{
@@ -344,4 +373,27 @@ var mimeTypeFromExt = _mimeTyper()
 func guessMimeType(p string) string {
 	resolvedMimeType := mimeTypeFromExt(p)
 	return resolvedMimeType
+}
+
+func CrudAtoi(ops ...string) CrudValue {
+	opValue := None
+
+	for _, op := range ops {
+		if len(op) < 1 {
+			continue
+		}
+
+		first := op[0]
+		if first == 'c' || first == 'C' {
+			opValue |= Create
+		} else if first == 'r' || first == 'R' {
+			opValue |= Read
+		} else if first == 'u' || first == 'U' {
+			opValue |= Update
+		} else if first == 'd' || first == 'D' {
+			opValue |= Delete
+		}
+	}
+
+	return opValue
 }

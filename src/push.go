@@ -411,12 +411,12 @@ func (g *Commands) remoteUntrash(change *Change) (err error) {
 	return
 }
 
-func (g *Commands) remoteDelete(change *Change) (err error) {
+func remoteRemover(g *Commands, change *Change, fn func(string) error) (err error) {
 	defer func() {
 		g.taskAdd(change.Dest.Size)
 	}()
 
-	err = g.rem.Trash(change.Dest.Id)
+	err = fn(change.Dest.Id)
 	if err != nil {
 		return
 	}
@@ -426,6 +426,14 @@ func (g *Commands) remoteDelete(change *Change) (err error) {
 		g.log.LogErrf("%s \"%s\": remove indexfile %v\n", change.Path, change.Dest.Id, rmErr)
 	}
 	return
+}
+
+func (g *Commands) remoteTrash(change *Change) error {
+	return remoteRemover(g, change, g.rem.Trash)
+}
+
+func (g *Commands) remoteDelete(change *Change) error {
+	return remoteRemover(g, change, g.rem.Delete)
 }
 
 func (g *Commands) remoteMkdirAll(d string) (file *File, err error) {
@@ -490,12 +498,16 @@ func list(context *config.Context, p string, hidden bool, ignore *regexp.Regexp)
 			if ignore != nil && ignore.Match([]byte(file.Name())) {
 				continue
 			}
-			if !isHidden(file.Name(), hidden) {
-				fileChan <- NewLocalFile(gopath.Join(absPath, file.Name()), file)
+			if isHidden(file.Name(), hidden) {
+				continue
 			}
 
 			symlink := (file.Mode() & os.ModeSymlink) != 0
-			if symlink {
+
+			if !symlink {
+				resPath := gopath.Join(absPath, file.Name())
+				fileChan <- NewLocalFile(resPath, file)
+			} else {
 				symAbsPath := gopath.Join(absPath, file.Name())
 				var symResolvPath string
 				symResolvPath, err = filepath.EvalSymlinks(symAbsPath)
@@ -508,7 +520,7 @@ func list(context *config.Context, p string, hidden bool, ignore *regexp.Regexp)
 				if err != nil {
 					continue
 				}
-				fileChan <- NewLocalFile(symAbsPath, symInfo)
+				fileChan <- NewLocalFile(symResolvPath, symInfo)
 			}
 		}
 		close(fileChan)

@@ -35,6 +35,20 @@ const (
 	OpModConflict
 )
 
+type CrudValue int
+
+const (
+	None   CrudValue = 0
+	Create           = 1 << iota
+	Read
+	Update
+	Delete
+)
+
+var (
+	AllCrudOperations CrudValue = Create | Read | Update | Delete
+)
+
 const (
 	DifferNone    = 0
 	DifferDirType = 1 << iota
@@ -296,6 +310,20 @@ func fileDifferences(src, dest *File, ignoreChecksum bool) int {
 
 func sameFileTillChecksum(src, dest *File, ignoreChecksum bool) bool {
 	return fileDifferences(src, dest, ignoreChecksum) == DifferNone
+}
+
+func (c *Change) crudValue() CrudValue {
+	op := c.Op()
+	if op == OpAdd {
+		return Create
+	}
+	if op == OpMod || op == OpModConflict {
+		return Update
+	}
+	if op == OpDelete {
+		return Delete
+	}
+	return None
 }
 
 func (c *Change) op() Operation {

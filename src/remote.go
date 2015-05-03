@@ -61,6 +61,7 @@ const (
 
 var (
 	ErrPathNotExists = errors.New("remote path doesn't exist")
+	ErrNetLookup     = errors.New("net lookup failed")
 )
 
 var (
@@ -146,11 +147,10 @@ func (r *Remote) change(changeId string) (*drive.Change, error) {
 func RetrieveRefreshToken(context *config.Context) (string, error) {
 	transport := newTransport(context)
 	url := transport.Config.AuthCodeURL("")
-	fmt.Println("Visit this URL to get an authorization code")
-	fmt.Println(url)
-	fmt.Print("Paste the authorization code: ")
-	var code string
-	fmt.Scanln(&code)
+	fmt.Printf("Visit this URL to get an authorization code\n%s\n", url)
+
+	code := prompt(os.Stdin, os.Stdout, "Paste the authorization code: ")
+
 	token, err := transport.Exchange(code)
 	if err != nil {
 		return "", err
@@ -247,6 +247,10 @@ func (r *Remote) Trash(id string) error {
 func (r *Remote) Untrash(id string) error {
 	_, err := r.service.Files.Untrash(id).Do()
 	return err
+}
+
+func (r *Remote) Delete(id string) error {
+	return r.service.Files.Delete(id).Do()
 }
 
 func (r *Remote) idForEmail(email string) (string, error) {
@@ -619,9 +623,14 @@ func (r *Remote) findByPathRecvRaw(parentId string, p []string, trashed bool) (f
 
 	// We only need the head file since we expect only one File to be created
 	req.MaxResults(1)
+
 	files, err := req.Do()
-	if err != nil || len(files.Items) < 1 {
-		// TODO: make sure only 404s are handled here
+
+	if err != nil {
+		return nil, err
+	}
+
+	if files == nil || len(files.Items) < 1 {
 		return nil, ErrPathNotExists
 	}
 

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/odeke-em/drive/config"
+	"github.com/odeke-em/dts/ascii-trie"
 	"github.com/odeke-em/log"
 )
 
@@ -96,7 +97,11 @@ func (g *Commands) resolveToLocalFile(relToRoot, fsPath string) (local *File, er
 		return
 	}
 
-	localinfo, _ := os.Stat(fsPath)
+	localinfo, statErr := os.Stat(fsPath)
+	if statErr != nil && !os.IsNotExist(statErr) {
+		err = statErr
+		return
+	}
 	if localinfo != nil {
 		local = NewLocalFile(fsPath, localinfo)
 	}
@@ -108,15 +113,14 @@ func (g *Commands) byRemoteResolve(relToRoot, fsPath string, r *File, isPush boo
 	var l *File
 	l, err = g.resolveToLocalFile(relToRoot, fsPath)
 	if err != nil {
-		g.log.LogErrf("%v\n", err)
-		return cl, nil
+		return cl, err
 	}
 
 	return g.doChangeListRecv(relToRoot, fsPath, l, r, isPush)
 }
 
 func (g *Commands) changeListResolve(relToRoot, fsPath string, isPush bool) (cl []*Change, err error) {
-	var r, l *File
+	var r *File
 	r, err = g.rem.FindByPath(relToRoot)
 	if err != nil {
 		// We cannot pull from a non-existant remote
@@ -125,13 +129,7 @@ func (g *Commands) changeListResolve(relToRoot, fsPath string, isPush bool) (cl 
 		}
 	}
 
-	l, err = g.resolveToLocalFile(relToRoot, fsPath)
-	if err != nil {
-		g.log.LogErrf("%s: %v\n", relToRoot, err)
-		return cl, nil
-	}
-
-	return g.doChangeListRecv(relToRoot, fsPath, l, r, isPush)
+	return g.byRemoteResolve(relToRoot, fsPath, r, isPush)
 }
 
 func (g *Commands) doChangeListRecv(relToRoot, fsPath string, l, r *File, isPush bool) (cl []*Change, err error) {
@@ -210,6 +208,11 @@ func (g *Commands) resolveChangeListRecv(
 		change = &Change{Path: p, Src: r, Dest: l, Parent: d}
 	}
 
+	forbiddenOp := (g.opts.ExcludeCrudMask & change.crudValue()) != 0
+	if forbiddenOp {
+		return cl, nil
+	}
+
 	change.Force = g.opts.Force
 	change.NoClobber = g.opts.NoClobber
 	change.IgnoreChecksum = g.opts.IgnoreChecksum
@@ -217,6 +220,7 @@ func (g *Commands) resolveChangeListRecv(
 	if change.Op() != OpNone {
 		cl = append(cl, change)
 	}
+
 	if !g.opts.Recursive {
 		return cl, nil
 	}
@@ -231,7 +235,7 @@ func (g *Commands) resolveChangeListRecv(
 
 	// look-up for children
 	var localChildren chan *File
-	if l == nil {
+	if l == nil || !l.IsDir {
 		localChildren = make(chan *File)
 		close(localChildren)
 	} else {
@@ -248,7 +252,19 @@ func (g *Commands) resolveChangeListRecv(
 		remoteChildren = make(chan *File)
 		close(remoteChildren)
 	}
-	dirlist := merge(remoteChildren, localChildren)
+	dirlist, clashes := merge(remoteChildren, localChildren, g.opts.IgnoreNameClashes)
+
+	if !g.opts.IgnoreNameClashes && len(clashes) >= 1 {
+		if rootLike(p) {
+			p = ""
+		}
+
+		for _, dup := range clashes {
+			g.log.LogErrf("\033[91mX\033[00m %s/%v \"%v\"\n", p, dup.Name, dup.Id)
+		}
+		err = fmt.Errorf("clashes detected. use `%s` to override this behavior", CLIOptionIgnoreNameClashes)
+		return
+	}
 
 	// Arbitrary value. TODO: Calibrate or calculate this value
 	chunkSize := 100
@@ -279,7 +295,12 @@ func (g *Commands) resolveChangeListRecv(
 				} else {
 					joined = strings.Join([]string{p, l.Name()}, "/")
 				}
-				childChanges, _ := g.resolveChangeListRecv(isPush, p, joined, l.remote, l.local)
+				childChanges, cErr := g.resolveChangeListRecv(isPush, p, joined, l.remote, l.local)
+				if cErr != nil && cErr != ErrPathNotExists {
+					g.log.LogErrf("%s: %v\n", p, cErr)
+					break
+				}
+
 				*cl = append(*cl, childChanges...)
 			}
 		}(&wg, isPush, &cl, p, dirlist[i:end])
@@ -290,27 +311,48 @@ func (g *Commands) resolveChangeListRecv(
 	return cl, nil
 }
 
-func merge(remotes, locals chan *File) (merged []*dirList) {
-	localMap := map[string]*File{}
+func merge(remotes, locals chan *File, ignoreClashes bool) (merged []*dirList, clashesChan []*File) {
+	localsTrie := asciitrie.New()
+	remotesTrie := asciitrie.New()
 
 	// TODO: Add support for FileSystems that allow same names but different files.
 	for l := range locals {
-		localMap[l.Name] = l
+		localsTrie.Set(l.Name, l)
 	}
 
 	for r := range remotes {
 		list := &dirList{remote: r}
+
+		if !ignoreClashes {
+			evicted := remotesTrie.Set(r.Name, r)
+			if evicted != nil {
+				evictedFile, ok := evicted.(*File)
+				if ok {
+					clashesChan = append(clashesChan, evictedFile)
+				}
+				continue
+			}
+		}
+
+		mem, ok := localsTrie.Get(r.Name)
 		// look for local
-		l, ok := localMap[r.Name]
 		if ok {
-			list.local = l
-			delete(localMap, r.Name)
+			l, lOk := mem.(*File)
+			if lOk {
+				list.local = l
+				localsTrie.Pop(r.Name)
+			}
 		}
 		merged = append(merged, list)
 	}
 
 	// if anything left in locals, add to the dir listing
-	for _, l := range localMap {
+	walk := localsTrie.Walk()
+	for item := range walk {
+		l, ok := item.(*File)
+		if !ok {
+			continue
+		}
 		merged = append(merged, &dirList{local: l})
 	}
 	return
