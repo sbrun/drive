@@ -423,7 +423,9 @@ func remoteRemover(g *Commands, change *Change, fn func(string) error) (err erro
 
 	indexPath := g.indexAbsPath(change.Dest.Id)
 	if rmErr := os.Remove(indexPath); rmErr != nil {
-		g.log.LogErrf("%s \"%s\": remove indexfile %v\n", change.Path, change.Dest.Id, rmErr)
+		if change.Src != nil {
+			g.log.LogErrf("%s \"%s\": remove indexfile %v\n", change.Path, change.Dest.Id, rmErr)
+		}
 	}
 	return
 }
@@ -520,7 +522,12 @@ func list(context *config.Context, p string, hidden bool, ignore *regexp.Regexp)
 				if err != nil {
 					continue
 				}
-				fileChan <- NewLocalFile(symResolvPath, symInfo)
+
+				lf := NewLocalFile(symResolvPath, symInfo)
+				// Retain the original name as appeared in
+				// the manifest instead of the resolved one
+				lf.Name = file.Name()
+				fileChan <- lf
 			}
 		}
 		close(fileChan)

@@ -297,8 +297,10 @@ func fileDifferences(src, dest *File, ignoreChecksum bool) int {
 		difference |= DifferDirType
 	}
 
-	if ignoreChecksum && sizeDiffers(difference) {
-		difference |= DifferMd5Checksum
+	if ignoreChecksum {
+		if sizeDiffers(difference) {
+			difference |= DifferMd5Checksum
+		}
 	} else {
 		// Only compute the checksum if the size differs
 		if sizeDiffers(difference) || md5Checksum(src) != md5Checksum(dest) {
@@ -306,10 +308,6 @@ func fileDifferences(src, dest *File, ignoreChecksum bool) int {
 		}
 	}
 	return difference
-}
-
-func sameFileTillChecksum(src, dest *File, ignoreChecksum bool) bool {
-	return fileDifferences(src, dest, ignoreChecksum) == DifferNone
 }
 
 func (c *Change) crudValue() CrudValue {

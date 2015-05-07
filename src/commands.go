@@ -139,6 +139,9 @@ func readCommentedFileCompileRegexp(p string) *regexp.Regexp {
 	if err != nil {
 		return nil
 	}
+	if len(clauses) < 1 {
+		return nil
+	}
 	regExComp, regErr := regexp.Compile(strings.Join(clauses, "|"))
 	if regErr != nil {
 		return nil

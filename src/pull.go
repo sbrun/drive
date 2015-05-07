@@ -37,6 +37,13 @@ type urlMimeTypeExt struct {
 	url      string
 }
 
+type downloadArg struct {
+	id              string
+	path            string
+	exportURL       string
+	ackByteProgress bool
+}
+
 // Pull from remote if remote path exists and in a god context. If path is a
 // directory, it recursively pulls from the remote if there are remote changes.
 // It doesn't check if there are remote changes if isForce is set.
@@ -377,7 +384,14 @@ func (g *Commands) export(f *File, destAbsPath string, exports []string) (manife
 				}
 			}
 
-			err := g.singleDownload(exportPath, id, urlMExt.url)
+			dlArg := downloadArg{
+				ackByteProgress: false,
+				path:            exportPath,
+				id:              id,
+				exportURL:       urlMExt.url,
+			}
+
+			err := g.singleDownload(&dlArg)
 			if err == nil {
 				manifest = append(manifest, exportPath)
 			}
@@ -400,7 +414,13 @@ func (g *Commands) download(change *Change, exports []string) (err error) {
 
 	destAbsPath := g.context.AbsPathOf(change.Path)
 	if change.Src.BlobAt != "" {
-		return g.singleDownload(destAbsPath, change.Src.Id, "")
+		dlArg := downloadArg{
+			path:            destAbsPath,
+			id:              change.Src.Id,
+			ackByteProgress: true,
+		}
+
+		return g.singleDownload(&dlArg)
 	}
 
 	// We need to touch the empty file to
@@ -451,11 +471,11 @@ func (g *Commands) download(change *Change, exports []string) (err error) {
 	return
 }
 
-func (g *Commands) singleDownload(p, id, exportURL string) (err error) {
+func (g *Commands) singleDownload(dlArg *downloadArg) (err error) {
 	var fo *os.File
-	fo, err = os.Create(p)
+	fo, err = os.Create(dlArg.path)
 	if err != nil {
-		g.log.LogErrf("create: %s %v\n", p, err)
+		g.log.LogErrf("create: %s %v\n", dlArg.path, err)
 		return
 	}
 
@@ -475,16 +495,23 @@ func (g *Commands) singleDownload(p, id, exportURL string) (err error) {
 		}
 	}()
 
-	blob, err = g.rem.Download(id, exportURL)
+	blob, err = g.rem.Download(dlArg.id, dlArg.exportURL)
 	if err != nil {
 		return err
 	}
 
 	ws := statos.NewWriter(fo)
+
 	go func() {
 		commChan := ws.ProgressChan()
-		for n := range commChan {
-			g.rem.progressChan <- n
+		if dlArg.ackByteProgress {
+			for n := range commChan {
+				g.rem.progressChan <- n
+			}
+		} else { // Just drain the progress channel
+			for _ = range commChan {
+				g.rem.progressChan <- 0
+			}
 		}
 	}()
 
