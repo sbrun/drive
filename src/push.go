@@ -27,7 +27,7 @@ import (
 	"time"
 
 	"github.com/odeke-em/drive/config"
-    "github.com/odeke-em/dts/trie"
+	"github.com/odeke-em/dts/trie"
 	ration "github.com/odeke-em/rationer"
 )
 
@@ -246,32 +246,32 @@ func (g *Commands) playPushChanges(cl []*Change, opMap *map[Operation]sizeCounte
 		}
 	}()
 
-    capacity := uint64(40)
+	capacity := uint64(100)
 	rationer := ration.NewRationer(capacity)
 
 	loader := rationer.Run()
 
-    addTrie := trie.New(trie.AsciiAlphabet)
-    delTrie := trie.New(trie.AsciiAlphabet)
-    modTrie := trie.New(trie.AsciiAlphabet)
+	addTrie := trie.New(trie.AsciiAlphabet)
+	delTrie := trie.New(trie.AsciiAlphabet)
+	modTrie := trie.New(trie.AsciiAlphabet)
 
 	for _, c := range cl {
 		switch c.Op() {
 		case OpMod:
-            modTrie.Set(c.Path, c)
+			modTrie.Set(c.Path, c)
 		case OpModConflict:
-            modTrie.Set(c.Path, c)
+			modTrie.Set(c.Path, c)
 		case OpAdd:
-            addTrie.Set(c.Path, c)
+			addTrie.Set(c.Path, c)
 		case OpDelete:
-            delTrie.Set(c.Path, c)
+			delTrie.Set(c.Path, c)
 		}
 	}
 
-    // Schedule them
-    trieOperator(addTrie, g.remoteAdd, loader)
-    trieOperator(modTrie, g.remoteMod, loader)
-    trieOperator(delTrie, g.remoteDelete, loader)
+	// Schedule them
+	trieOperator(addTrie, g.remoteAdd, loader)
+	trieOperator(modTrie, g.remoteMod, loader)
+	trieOperator(delTrie, g.remoteDelete, loader)
 
 	loader <- ration.Sentinel
 	rationer.Wait()
@@ -281,22 +281,20 @@ func (g *Commands) playPushChanges(cl []*Change, opMap *map[Operation]sizeCounte
 }
 
 func trieOperator(t *trie.Trie, f func(*Change) error, loader chan interface{}) {
-    t.Tag(trie.PotentialTerminalDir, true)
+	walk := t.Walk()
 
-    walk := t.Match(trie.PotentialTerminalDir)
-
-    for divNode := range walk {
-        loader <- func (dnn **trie.TrieNode) ration.Job {
-            it := *dnn
-            return func () interface{} {
-                cast, ok := it.Data.(*Change)
-                if !ok {
-                    return fmt.Errorf("cast to \"Change\" failed")
-                }
-                return f(cast)
-            }
-        }(&divNode)
-    }
+	for divNode := range walk {
+		loader <- func(itt *interface{}) ration.Job {
+			it := *itt
+			return func() interface{} {
+				cast, ok := it.(*Change)
+				if !ok {
+					return fmt.Errorf("cast to \"Change\" failed")
+				}
+				return f(cast)
+			}
+		}(&divNode)
+	}
 }
 
 func lonePush(g *Commands, parent, absPath, path string) (cl []*Change, err error) {
