@@ -28,6 +28,8 @@ import (
 var (
 	GDDirSuffix   = ".gd"
 	PathSeparator = fmt.Sprintf("%c", os.PathSeparator)
+
+	ErrNoDriveContext = errors.New("no drive context found; run `drive init` or go into one of the directories (sub directories) that you performed `drive init`")
 )
 
 type Context struct {
@@ -131,7 +133,7 @@ func Discover(currentAbsPath string) (context *Context, err error) {
 	}
 
 	if !found {
-		return nil, errors.New("no gd context is found; use gd init")
+		return nil, ErrNoDriveContext
 	}
 	context = &Context{AbsPath: p}
 	if err = context.Read(); err != nil {

@@ -492,25 +492,25 @@ func list(context *config.Context, p string, hidden bool, ignore *regexp.Regexp)
 
 	go func() {
 		for _, file := range f {
-			if file.Name() == config.GDDirSuffix {
+			fileName := file.Name()
+			if fileName == config.GDDirSuffix {
 				continue
 			}
-			if ignore != nil && ignore.Match([]byte(file.Name())) {
+			if ignore != nil && ignore.Match([]byte(fileName)) {
 				continue
 			}
-			if isHidden(file.Name(), hidden) {
+			if isHidden(fileName, hidden) {
 				continue
 			}
 
 			symlink := (file.Mode() & os.ModeSymlink) != 0
+			resPath := gopath.Join(absPath, fileName)
 
 			if !symlink {
-				resPath := gopath.Join(absPath, file.Name())
 				fileChan <- NewLocalFile(resPath, file)
 			} else {
-				symAbsPath := gopath.Join(absPath, file.Name())
 				var symResolvPath string
-				symResolvPath, err = filepath.EvalSymlinks(symAbsPath)
+				symResolvPath, err = filepath.EvalSymlinks(resPath)
 				if err != nil {
 					continue
 				}
@@ -524,7 +524,7 @@ func list(context *config.Context, p string, hidden bool, ignore *regexp.Regexp)
 				lf := NewLocalFile(symResolvPath, symInfo)
 				// Retain the original name as appeared in
 				// the manifest instead of the resolved one
-				lf.Name = file.Name()
+				lf.Name = fileName
 				fileChan <- lf
 			}
 		}

@@ -140,24 +140,62 @@ func (g *Commands) List() (err error) {
 		}
 	}
 	spin.stop()
+	return
+}
 
-	// No-op for now for explicitly traversing shared content
-	if false {
-		// TODO: Allow traversal of shared content as well as designated paths
-		// Next for shared
-		sharedRemotes, sErr := g.rem.FindByPathShared("")
-		if sErr == nil {
-			opt := attribute{
-				minimal: isMinimal(g.opts.TypeMask),
-				parent:  "",
-				mask:    g.opts.TypeMask,
+func (g *Commands) ListShared() (err error) {
+	var kvList []*keyValue
+
+	for _, relPath := range g.opts.Sources {
+		sharedRemotes, sErr := g.rem.FindByPathShared(relPath)
+		if sErr != nil {
+			g.log.LogErrf("%v: '%s'\n", sErr, relPath)
+			return sErr
+		}
+
+		parentPath := g.parentPather(relPath)
+
+		if remoteRootLike(parentPath) {
+			parentPath = ""
+		}
+
+		if rootLike(parentPath) {
+			parentPath = ""
+		}
+
+		for s := range sharedRemotes {
+			if remoteRootLike(s.Name) {
+				s.Name = ""
 			}
-			for sFile := range sharedRemotes {
-				sFile.pretty(g.log, opt)
+
+			if s == nil {
+				continue
 			}
+
+			kvList = append(kvList, &keyValue{key: parentPath, value: s})
 		}
 	}
 
+	spin := g.playabler()
+	spin.play()
+	for _, kv := range kvList {
+		if kv == nil || kv.value == nil {
+			continue
+		}
+
+		travSt := traversalSt{
+			depth:    g.opts.Depth,
+			file:     kv.value.(*File),
+			headPath: kv.key,
+			inTrash:  g.opts.InTrash,
+			mask:     g.opts.TypeMask,
+		}
+
+		if !g.breadthFirst(travSt, spin) {
+			break
+		}
+	}
+	spin.stop()
 	return
 }
 
@@ -295,4 +333,8 @@ func owners(mask int) bool {
 
 func version(mask int) bool {
 	return (mask & CurrentVersion) != 0
+}
+
+func shared(mask int) bool {
+	return (mask & Shared) != 0
 }

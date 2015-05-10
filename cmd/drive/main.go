@@ -230,7 +230,9 @@ func (cmd *listCmd) Run(args []string) {
 		Quiet:     *cmd.quiet,
 	}
 
-	if *cmd.matches {
+	if *cmd.shared {
+		exitWithError(drive.New(context, &options).ListShared())
+	} else if *cmd.matches {
 		exitWithError(drive.New(context, &options).ListMatches())
 	} else {
 		exitWithError(drive.New(context, &options).List())

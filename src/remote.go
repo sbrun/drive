@@ -25,8 +25,8 @@ import (
 	"strings"
 	"time"
 
-	"code.google.com/p/goauth2/oauth"
 	"github.com/odeke-em/drive/config"
+	"github.com/odeke-em/goauth2/oauth"
 	drive "github.com/odeke-em/google-api-go-client/drive/v2"
 	"github.com/odeke-em/statos"
 )
