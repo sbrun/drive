@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
 	spinner "github.com/odeke-em/cli-spinner"
 )
@@ -30,12 +31,37 @@ const (
 	RemoteDriveRootPath = "My Drive"
 )
 
+var (
+	ThrottledRequestsDuration = time.Duration(1e9 / 20) // Arbitrary value
+)
+
 var BytesPerKB = float64(1024)
+
+var (
+	MsgInternalServerError = "googleapi: Error 500: Internal Error, internalError"
+	MsgUserLimitExceeded   = "googleapi: Error 403: User rate limit exceeded, userRateLimitExceeded"
+)
 
 type desktopEntry struct {
 	name string
 	url  string
 	icon string
+}
+
+func retryableErrorCheck(v interface{}) (ok, retryable bool) {
+	err, ok := v.(error)
+	if !ok || err == nil {
+		return true, false
+	}
+
+	switch err.Error() {
+	case MsgUserLimitExceeded:
+		return false, true
+	case MsgInternalServerError:
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 type playable struct {
