@@ -60,8 +60,9 @@ const (
 )
 
 var (
-	ErrPathNotExists = errors.New("remote path doesn't exist")
-	ErrNetLookup     = errors.New("net lookup failed")
+	ErrPathNotExists   = errors.New("remote path doesn't exist")
+	ErrNetLookup       = errors.New("net lookup failed")
+	ErrClashesDetected = fmt.Errorf("clashes detected. use `%s` to override this behavior", CLIOptionIgnoreNameClashes)
 )
 
 var (
@@ -514,6 +515,11 @@ func (r *Remote) copy(newName, parentId string, srcFile *File) (*File, error) {
 func (r *Remote) UpsertByComparison(args *upsertOpt) (f *File, err error) {
 	var body io.Reader
 	body, err = os.Open(args.fsAbsPath)
+	/*
+	   // TODO: (@odeke-em) decide:
+	   //   + if to reject FIFO
+	   //   + perform an assertion for fileStated.IsDir() == args.src.IsDir
+	*/
 	if args.src == nil {
 		err = fmt.Errorf("bug on: src cannot be nil")
 		return

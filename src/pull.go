@@ -47,7 +47,7 @@ type downloadArg struct {
 // Pull from remote if remote path exists and in a god context. If path is a
 // directory, it recursively pulls from the remote if there are remote changes.
 // It doesn't check if there are remote changes if isForce is set.
-func (g *Commands) Pull() (err error) {
+func (g *Commands) Pull(byId bool) (err error) {
 	var cl []*Change
 
 	g.log.Logln("Resolving...")
@@ -55,17 +55,12 @@ func (g *Commands) Pull() (err error) {
 	spin := g.playabler()
 	spin.play()
 
-	for _, relToRootPath := range g.opts.Sources {
-		fsPath := g.context.AbsPathOf(relToRootPath)
-		ccl, cErr := g.changeListResolve(relToRootPath, fsPath, false)
-		if cErr != nil {
-			return cErr
-		}
-		if len(ccl) > 0 {
-			cl = append(cl, ccl...)
-		}
+	resolver := g.pullByPath
+	if byId {
+		resolver = g.pullById
 	}
 
+	cl, err = resolver()
 	spin.stop()
 
 	nonConflictsPtr, conflictsPtr := g.resolveConflicts(cl, false)
@@ -132,10 +127,14 @@ func (g *Commands) PullMatches() (err error) {
 	return g.playPullChanges(nonConflicts, g.opts.Exports, opMap)
 }
 
-func (g *Commands) PullPiped() (err error) {
-	// Cannot pull asynchronously because the pull order must be maintained
+func (g *Commands) PullPiped(byId bool) (err error) {
+	resolver := g.rem.FindByPath
+	if byId {
+		resolver = g.rem.FindById
+	}
+
 	for _, relToRootPath := range g.opts.Sources {
-		rem, err := g.rem.FindByPath(relToRootPath)
+		rem, err := resolver(relToRootPath)
 		if err != nil {
 			return fmt.Errorf("%s: %v", relToRootPath, err)
 		}
@@ -143,20 +142,72 @@ func (g *Commands) PullPiped() (err error) {
 			continue
 		}
 
-		if hasExportLinks(rem) {
-			g.log.LogErrf("'%s' is a GoogleDoc/Sheet document cannot be pulled from raw, only exported.\n", relToRootPath)
-			continue
+		err = g.pullAndDownload(relToRootPath, os.Stdout, rem, true)
+		if err != nil {
+			return err
 		}
-		blobHandle, dlErr := g.rem.Download(rem.Id, "")
-		if dlErr != nil {
-			return dlErr
-		}
-		if blobHandle == nil {
-			continue
-		}
-		_, err = io.Copy(os.Stdout, blobHandle)
-		blobHandle.Close()
 	}
+	return nil
+}
+
+func (g *Commands) pullById() (cl []*Change, err error) {
+	for _, srcId := range g.opts.Sources {
+		rem, remErr := g.rem.FindById(srcId)
+		if remErr != nil {
+			return cl, fmt.Errorf("pullById: %s: %v", srcId, remErr)
+		}
+
+		if rem == nil {
+			g.log.LogErrf("%s does not exist\n", srcId)
+			continue
+		}
+
+		relToRootPath := filepath.Join(g.opts.Path, rem.Name)
+		curAbsPath := g.context.AbsPathOf(relToRootPath)
+		local, resErr := g.resolveToLocalFile(rem.Name, curAbsPath)
+		if resErr != nil {
+			return cl, resErr
+		}
+
+		ccl, clErr := g.doChangeListRecv(relToRootPath, curAbsPath, local, rem, false)
+		if clErr != nil {
+			return cl, clErr
+		}
+		cl = append(cl, ccl...)
+	}
+
+	return cl, nil
+}
+
+func (g *Commands) pullByPath() (cl []*Change, err error) {
+	for _, relToRootPath := range g.opts.Sources {
+		fsPath := g.context.AbsPathOf(relToRootPath)
+		ccl, cErr := g.changeListResolve(relToRootPath, fsPath, false)
+		if cErr != nil {
+			return cl, cErr
+		}
+		if len(ccl) > 0 {
+			cl = append(cl, ccl...)
+		}
+	}
+
+	return cl, nil
+}
+
+func (g *Commands) pullAndDownload(relToRootPath string, fh io.Writer, rem *File, piped bool) (err error) {
+	if hasExportLinks(rem) {
+		return fmt.Errorf("'%s' is a GoogleDoc/Sheet document cannot be pulled from raw, only exported.\n", relToRootPath)
+	}
+	blobHandle, dlErr := g.rem.Download(rem.Id, "")
+	if dlErr != nil {
+		return dlErr
+	}
+	if blobHandle == nil {
+		return nil
+	}
+
+	_, err = io.Copy(fh, blobHandle)
+	blobHandle.Close()
 	return
 }
 
@@ -376,7 +427,7 @@ func (g *Commands) export(f *File, destAbsPath string, exports []string) (manife
 
 			// TODO: Decide if users should get to make *.desktop users even for exports
 			if runtime.GOOS == OSLinuxKey && false {
-				desktopEntryPath := sepJoin(".", exportPath, "desktop")
+				desktopEntryPath := sepJoin(".", exportPath, DesktopExtension)
 
 				_, dentErr := f.serializeAsDesktopEntry(desktopEntryPath, urlMExt)
 				if dentErr != nil {
@@ -409,7 +460,7 @@ func isLocalFile(f *File) bool {
 
 func (g *Commands) download(change *Change, exports []string) (err error) {
 	if change.Src == nil {
-		return fmt.Errorf("Tried to download nil change.Src")
+		return fmt.Errorf("tried to download nil change.Src")
 	}
 
 	destAbsPath := g.context.AbsPathOf(change.Path)
@@ -446,7 +497,7 @@ func (g *Commands) download(change *Change, exports []string) (err error) {
 		}
 
 		dirPath = filepath.Join(dirPath, f.Name)
-		desktopEntryPath := sepJoin(".", dirPath)
+		desktopEntryPath := sepJoin(".", dirPath, DesktopExtension)
 
 		_, dentErr := f.serializeAsDesktopEntry(desktopEntryPath, &urlMExt)
 		if dentErr != nil {

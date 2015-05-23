@@ -14,21 +14,34 @@
 
 package drive
 
-func (c *Commands) Publish() (err error) {
+import (
+	"fmt"
+)
+
+func (c *Commands) Publish(byId bool) (err error) {
 	for _, relToRoot := range c.opts.Sources {
-		if pubErr := c.pub(relToRoot); pubErr != nil {
+		if pubErr := c.pub(relToRoot, byId); pubErr != nil {
 			c.log.LogErrf("\033[91mPub\033[00m %s:  %v\n", relToRoot, pubErr)
 		}
 	}
 	return
 }
 
-func (c *Commands) pub(relToRoot string) (err error) {
-	var file *File
-	file, err = c.rem.FindByPath(relToRoot)
+func (c *Commands) remFileResolve(relToRoot string, byId bool) (*File, error) {
+	resolver := c.rem.FindByPath
+	if byId {
+		resolver = c.rem.FindById
+	}
+
+	return resolver(relToRoot)
+}
+
+func (c *Commands) pub(relToRoot string, byId bool) (err error) {
+	file, err := c.remFileResolve(relToRoot, byId)
 	if err != nil {
 		return err
 	}
+
 	var link string
 	link, err = c.rem.Publish(file.Id)
 	if err != nil {
@@ -37,23 +50,29 @@ func (c *Commands) pub(relToRoot string) (err error) {
 	if hasExportLinks(file) {
 		link = file.AlternateLink
 	}
-	c.log.Logf("%s Published on %s\n", relToRoot, link)
+
+	if byId {
+		relToRoot = fmt.Sprintf("%s aka %s", relToRoot, file.Name)
+	}
+
+	c.log.Logf("%s published on %s\n", relToRoot, link)
 	return
 }
 
-func (c *Commands) Unpublish() error {
+func (c *Commands) Unpublish(byId bool) error {
 	for _, relToRoot := range c.opts.Sources {
-		if unpubErr := c.unpub(relToRoot); unpubErr != nil {
+		if unpubErr := c.unpub(relToRoot, byId); unpubErr != nil {
 			c.log.LogErrf("\033[91mUnpub\033[00m %s:  %v\n", relToRoot, unpubErr)
 		}
 	}
 	return nil
 }
 
-func (c *Commands) unpub(relToRoot string) error {
-	file, err := c.rem.FindByPath(relToRoot)
+func (c *Commands) unpub(relToRoot string, byId bool) error {
+	file, err := c.remFileResolve(relToRoot, byId)
 	if err != nil {
 		return err
 	}
+
 	return c.rem.Unpublish(file.Id)
 }

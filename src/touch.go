@@ -18,14 +18,18 @@ import (
 	"time"
 )
 
-func (g *Commands) Touch() (err error) {
+func (g *Commands) Touch(byId bool) (err error) {
 	// Arbitrary value for rate limiter
 	throttle := time.Tick(1e9 / 10)
 
 	chanMap := map[int]chan *keyValue{}
 
 	for i, relToRootPath := range g.opts.Sources {
-		chanMap[i] = g.touch(relToRootPath, "")
+		fileId := ""
+		if byId {
+			fileId = relToRootPath
+		}
+		chanMap[i] = g.touch(relToRootPath, fileId)
 		<-throttle
 	}
 

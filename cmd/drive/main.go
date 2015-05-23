@@ -144,6 +144,7 @@ func (cmd *quotaCmd) Run(args []string) {
 }
 
 type listCmd struct {
+	byId        *bool
 	hidden      *bool
 	pageCount   *int
 	recursive   *bool
@@ -176,23 +177,13 @@ func (cmd *listCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.recursive = fs.Bool("r", false, "recursively list subdirectories")
 	cmd.matches = fs.Bool("matches", false, "list by prefix")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "list by id instead of path")
 
 	return fs
 }
 
 func (cmd *listCmd) Run(args []string) {
-	var path string
-	var sources []string
-	var context *config.Context
-
-	if !*cmd.matches {
-		sources, context, path = preprocessArgs(args)
-	} else {
-		cwd, err := os.Getwd()
-		exitWithError(err)
-		sources = args
-		_, context, path = preprocessArgs([]string{cwd})
-	}
+	sources, context, path := preprocessArgsByToggle(args, (*cmd.byId || *cmd.matches))
 
 	typeMask := 0
 	if *cmd.directories {
@@ -235,7 +226,7 @@ func (cmd *listCmd) Run(args []string) {
 	} else if *cmd.matches {
 		exitWithError(drive.New(context, &options).ListMatches())
 	} else {
-		exitWithError(drive.New(context, &options).List())
+		exitWithError(drive.New(context, &options).List(*cmd.byId))
 	}
 }
 
@@ -243,28 +234,37 @@ type statCmd struct {
 	hidden    *bool
 	recursive *bool
 	quiet     *bool
+	byId      *bool
 }
 
 func (cmd *statCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.hidden = fs.Bool("hidden", false, "discover hidden paths")
 	cmd.recursive = fs.Bool("r", false, "recursively discover folders")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "stat by id instead of path")
 	return fs
 }
 
 func (cmd *statCmd) Run(args []string) {
-	sources, context, path := preprocessArgs(args)
+	sources, context, path := preprocessArgsByToggle(args, *cmd.byId)
 
-	exitWithError(drive.New(context, &drive.Options{
+	opts := drive.Options{
 		Hidden:    *cmd.hidden,
 		Path:      path,
 		Recursive: *cmd.recursive,
 		Sources:   sources,
 		Quiet:     *cmd.quiet,
-	}).Stat())
+	}
+
+	if *cmd.byId {
+		exitWithError(drive.New(context, &opts).StatById())
+	} else {
+		exitWithError(drive.New(context, &opts).Stat())
+	}
 }
 
 type pullCmd struct {
+	byId              *bool
 	exportsDir        *string
 	export            *string
 	excludeOps        *string
@@ -297,23 +297,13 @@ func (cmd *pullCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.piped = fs.Bool("piped", false, "if true, read content from stdin")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
 	cmd.excludeOps = fs.String(drive.CLIOptionExcludeOperations, "", drive.DescExcludeOps)
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "pull by id instead of path")
 
 	return fs
 }
 
 func (cmd *pullCmd) Run(args []string) {
-	var path string
-	var sources []string
-	var context *config.Context
-
-	if !*cmd.matches {
-		sources, context, path = preprocessArgs(args)
-	} else {
-		cwd, err := os.Getwd()
-		exitWithError(err)
-		sources = args
-		_, context, path = preprocessArgs([]string{cwd})
-	}
+	sources, context, path := preprocessArgsByToggle(args, (*cmd.byId || *cmd.matches))
 
 	excludes := drive.NonEmptyTrimmedStrings(strings.Split(*cmd.excludeOps, ",")...)
 	excludeCrudMask := drive.CrudAtoi(excludes...)
@@ -345,9 +335,9 @@ func (cmd *pullCmd) Run(args []string) {
 	if *cmd.matches {
 		exitWithError(drive.New(context, options).PullMatches())
 	} else if *cmd.piped {
-		exitWithError(drive.New(context, options).PullPiped())
+		exitWithError(drive.New(context, options).PullPiped(*cmd.byId))
 	} else {
-		exitWithError(drive.New(context, options).Pull())
+		exitWithError(drive.New(context, options).Pull(*cmd.byId))
 	}
 }
 
@@ -411,6 +401,7 @@ func (cmd *pushCmd) Run(args []string) {
 }
 
 type touchCmd struct {
+	byId      *bool
 	hidden    *bool
 	recursive *bool
 	matches   *bool
@@ -422,28 +413,25 @@ func (cmd *touchCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.recursive = fs.Bool("r", false, "toggles recursive touching")
 	cmd.matches = fs.Bool("matches", false, "search by prefix and touch")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "share by id instead of path")
 	return fs
 }
 
 func (cmd *touchCmd) Run(args []string) {
+	sources, context, path := preprocessArgsByToggle(args, *cmd.matches || *cmd.byId)
+
+	opts := drive.Options{
+		Hidden:    *cmd.hidden,
+		Path:      path,
+		Recursive: *cmd.recursive,
+		Sources:   sources,
+		Quiet:     *cmd.quiet,
+	}
+
 	if *cmd.matches {
-		cwd, err := os.Getwd()
-		exitWithError(err)
-		_, context, path := preprocessArgs([]string{cwd})
-		exitWithError(drive.New(context, &drive.Options{
-			Path:    path,
-			Sources: args,
-			Quiet:   *cmd.quiet,
-		}).TouchByMatch())
+		exitWithError(drive.New(context, &opts).TouchByMatch())
 	} else {
-		sources, context, path := preprocessArgs(args)
-		exitWithError(drive.New(context, &drive.Options{
-			Hidden:    *cmd.hidden,
-			Path:      path,
-			Recursive: *cmd.recursive,
-			Sources:   sources,
-			Quiet:     *cmd.quiet,
-		}).Touch())
+		exitWithError(drive.New(context, &opts).Touch(*cmd.byId))
 	}
 }
 
@@ -588,26 +576,29 @@ func (cmd *diffCmd) Run(args []string) {
 type publishCmd struct {
 	hidden *bool
 	quiet  *bool
+	byId   *bool
 }
 
 type unpublishCmd struct {
 	hidden *bool
 	quiet  *bool
+	byId   *bool
 }
 
 func (cmd *unpublishCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.hidden = fs.Bool("hidden", false, "allows pulling of hidden paths")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "unpublish by id instead of path")
 	return fs
 }
 
 func (cmd *unpublishCmd) Run(args []string) {
-	sources, context, path := preprocessArgs(args)
+	sources, context, path := preprocessArgsByToggle(args, *cmd.byId)
 	exitWithError(drive.New(context, &drive.Options{
 		Path:    path,
 		Sources: sources,
 		Quiet:   *cmd.quiet,
-	}).Unpublish())
+	}).Unpublish(*cmd.byId))
 }
 
 type emptyTrashCmd struct {
@@ -633,32 +624,30 @@ type deleteCmd struct {
 	hidden  *bool
 	matches *bool
 	quiet   *bool
+	byId    *bool
 }
 
 func (cmd *deleteCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.hidden = fs.Bool("hidden", false, "allows trashing hidden paths")
 	cmd.matches = fs.Bool("matches", false, "search by prefix and trash")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "delete by id instead of path")
 	return fs
 }
 
 func (cmd *deleteCmd) Run(args []string) {
+	sources, context, path := preprocessArgsByToggle(args, *cmd.matches || *cmd.byId)
+
+	opts := drive.Options{
+		Path:    path,
+		Sources: sources,
+		Quiet:   *cmd.quiet,
+	}
+
 	if !*cmd.matches {
-		sources, context, path := preprocessArgs(args)
-		exitWithError(drive.New(context, &drive.Options{
-			Path:    path,
-			Sources: sources,
-			Quiet:   *cmd.quiet,
-		}).Delete())
+		exitWithError(drive.New(context, &opts).Delete(*cmd.byId))
 	} else {
-		cwd, err := os.Getwd()
-		exitWithError(err)
-		_, context, path := preprocessArgs([]string{cwd})
-		exitWithError(drive.New(context, &drive.Options{
-			Path:    path,
-			Sources: args,
-			Quiet:   *cmd.quiet,
-		}).DeleteByMatch())
+		exitWithError(drive.New(context, &opts).DeleteByMatch())
 	}
 }
 
@@ -666,43 +655,42 @@ type trashCmd struct {
 	hidden  *bool
 	matches *bool
 	quiet   *bool
+	byId    *bool
 }
 
 func (cmd *trashCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.hidden = fs.Bool("hidden", false, "allows trashing hidden paths")
 	cmd.matches = fs.Bool("matches", false, "search by prefix and trash")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "trash by id instead of path")
 	return fs
 }
 
 func (cmd *trashCmd) Run(args []string) {
+	sources, context, path := preprocessArgsByToggle(args, *cmd.matches || *cmd.byId)
+	opts := drive.Options{
+		Path:    path,
+		Sources: sources,
+		Quiet:   *cmd.quiet,
+	}
+
 	if !*cmd.matches {
-		sources, context, path := preprocessArgs(args)
-		exitWithError(drive.New(context, &drive.Options{
-			Path:    path,
-			Sources: sources,
-			Quiet:   *cmd.quiet,
-		}).Trash())
+		exitWithError(drive.New(context, &opts).Trash(*cmd.byId))
 	} else {
-		cwd, err := os.Getwd()
-		exitWithError(err)
-		_, context, path := preprocessArgs([]string{cwd})
-		exitWithError(drive.New(context, &drive.Options{
-			Path:    path,
-			Sources: args,
-			Quiet:   *cmd.quiet,
-		}).TrashByMatch())
+		exitWithError(drive.New(context, &opts).TrashByMatch())
 	}
 }
 
 type copyCmd struct {
 	quiet     *bool
 	recursive *bool
+	byId      *bool
 }
 
 func (cmd *copyCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.recursive = fs.Bool("r", false, "recursive copying")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "copy by id instead of path")
 	return fs
 }
 
@@ -710,78 +698,95 @@ func (cmd *copyCmd) Run(args []string) {
 	if len(args) < 2 {
 		args = append(args, ".")
 	}
-	sources, context, path := preprocessArgs(args)
+
+	end := len(args) - 1
+	if end < 1 {
+		exitWithError(fmt.Errorf("copy: expected more than one path"))
+	}
+
+	dest := args[end]
+
+	sources, context, path := preprocessArgsByToggle(args, *cmd.byId)
+	// Unshift by the end path
+	sources = sources[:len(sources)-1]
+	destRels, err := relativePaths(context.AbsPathOf(""), dest)
+	exitWithError(err)
+
+	dest = destRels[0]
+	sources = append(sources, dest)
+
 	exitWithError(drive.New(context, &drive.Options{
 		Path:      path,
 		Sources:   sources,
 		Recursive: *cmd.recursive,
 		Quiet:     *cmd.quiet,
-	}).Copy())
+	}).Copy(*cmd.byId))
 }
 
 type untrashCmd struct {
 	hidden  *bool
 	matches *bool
 	quiet   *bool
+	byId    *bool
 }
 
 func (cmd *untrashCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.hidden = fs.Bool("hidden", false, "allows untrashing hidden paths")
 	cmd.matches = fs.Bool("matches", false, "search by prefix and untrash")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "untrash by id instead of path")
 	return fs
 }
 
 func (cmd *untrashCmd) Run(args []string) {
+	sources, context, path := preprocessArgsByToggle(args, *cmd.byId || *cmd.matches)
+
+	opts := drive.Options{
+		Path:    path,
+		Sources: sources,
+		Quiet:   *cmd.quiet,
+	}
+
 	if !*cmd.matches {
-		sources, context, path := preprocessArgs(args)
-		exitWithError(drive.New(context, &drive.Options{
-			Path:    path,
-			Sources: sources,
-			Quiet:   *cmd.quiet,
-		}).Untrash())
+		exitWithError(drive.New(context, &opts).Untrash(*cmd.byId))
 	} else {
-		cwd, err := os.Getwd()
-		exitWithError(err)
-		_, context, path := preprocessArgs([]string{cwd})
-		exitWithError(drive.New(context, &drive.Options{
-			Path:    path,
-			Sources: args,
-			Quiet:   *cmd.quiet,
-		}).UntrashByMatch())
+		exitWithError(drive.New(context, &opts).UntrashByMatch())
 	}
 }
 
 func (cmd *publishCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.hidden = fs.Bool("hidden", false, "allows publishing of hidden paths")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "publish by id instead of path")
 	return fs
 }
 
 func (cmd *publishCmd) Run(args []string) {
-	sources, context, path := preprocessArgs(args)
+	sources, context, path := preprocessArgsByToggle(args, *cmd.byId)
 	exitWithError(drive.New(context, &drive.Options{
 		Path:    path,
 		Sources: sources,
 		Quiet:   *cmd.quiet,
-	}).Publish())
+	}).Publish(*cmd.byId))
 }
 
 type unshareCmd struct {
 	noPrompt    *bool
 	accountType *string
 	quiet       *bool
+	byId        *bool
 }
 
 func (cmd *unshareCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.accountType = fs.String("type", "", "scope of account to revoke access to")
 	cmd.noPrompt = fs.Bool("no-prompt", false, "disables the prompt")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "unshare by id instead of path")
 	return fs
 }
 
 func (cmd *unshareCmd) Run(args []string) {
-	sources, context, path := preprocessArgs(args)
+	sources, context, path := preprocessArgsByToggle(args, *cmd.byId)
 
 	meta := map[string][]string{
 		"accountType": uniqOrderedStr(drive.NonEmptyTrimmedStrings(strings.Split(*cmd.accountType, ",")...)),
@@ -793,45 +798,62 @@ func (cmd *unshareCmd) Run(args []string) {
 		Sources:  sources,
 		NoPrompt: *cmd.noPrompt,
 		Quiet:    *cmd.quiet,
-	}).Unshare())
+	}).Unshare(*cmd.byId))
 }
 
 type moveCmd struct {
 	quiet *bool
+	byId  *bool
 }
 
 func (cmd *moveCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "unshare by id instead of path")
 	return fs
 }
 
 func (cmd *moveCmd) Run(args []string) {
-	sources, context, path := preprocessArgs(args)
+	argc := len(args)
+	if argc < 1 {
+		exitWithError(fmt.Errorf("move: expecting a path or more"))
+	}
+	sources, context, path := preprocessArgsByToggle(args, *cmd.byId)
+	// Unshift by the end path
+	sources = sources[:len(sources)-1]
+
+	dest := args[argc-1]
+	destRels, err := relativePaths(context.AbsPathOf(""), dest)
+	exitWithError(err)
+
+	sources = append(sources, destRels[0])
+
 	exitWithError(drive.New(context, &drive.Options{
 		Path:    path,
 		Sources: sources,
 		Quiet:   *cmd.quiet,
-	}).Move())
+	}).Move(*cmd.byId))
 }
 
 type renameCmd struct {
 	force *bool
 	quiet *bool
+	byId  *bool
 }
 
 func (cmd *renameCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.force = fs.Bool("force", false, "coerce rename even if remote already exists")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "unshare by id instead of path")
 	return fs
 }
 
 func (cmd *renameCmd) Run(args []string) {
 	argc := len(args)
 	if argc < 2 {
-		exitWithError(fmt.Errorf("move: expecting <src> <dest>"))
+		exitWithError(fmt.Errorf("rename: expecting <src> <dest>"))
 	}
 	rest, last := args[:argc-1], args[argc-1]
-	sources, context, path := preprocessArgs(rest)
+	sources, context, path := preprocessArgsByToggle(rest, *cmd.byId)
 
 	sources = append(sources, last)
 	exitWithError(drive.New(context, &drive.Options{
@@ -839,10 +861,11 @@ func (cmd *renameCmd) Run(args []string) {
 		Sources: sources,
 		Force:   *cmd.force,
 		Quiet:   *cmd.quiet,
-	}).Rename())
+	}).Rename(*cmd.byId))
 }
 
 type shareCmd struct {
+	byId        *bool
 	emails      *string
 	message     *string
 	role        *string
@@ -860,11 +883,12 @@ func (cmd *shareCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 	cmd.notify = fs.Bool("notify", true, "toggle whether to notify receipients about share")
 	cmd.noPrompt = fs.Bool("no-prompt", false, "disables the prompt")
 	cmd.quiet = fs.Bool(drive.QuietKey, false, "if set, do not log anything but errors")
+	cmd.byId = fs.Bool(drive.CLIOptionId, false, "share by id instead of path")
 	return fs
 }
 
 func (cmd *shareCmd) Run(args []string) {
-	sources, context, path := preprocessArgs(args)
+	sources, context, path := preprocessArgsByToggle(args, *cmd.byId)
 
 	meta := map[string][]string{
 		"emailMessage": []string{*cmd.message},
@@ -885,7 +909,7 @@ func (cmd *shareCmd) Run(args []string) {
 		TypeMask: mask,
 		NoPrompt: *cmd.noPrompt,
 		Quiet:    *cmd.quiet,
-	}).Share())
+	}).Share(*cmd.byId))
 }
 
 func initContext(args []string) *config.Context {
@@ -961,7 +985,7 @@ func exitWithError(err error) {
 	}
 }
 
-func relativePaths(root string, args []string) ([]string, error) {
+func relativePaths(root string, args ...string) ([]string, error) {
 	return relativePathsOpt(root, args, false)
 }
 
@@ -1008,8 +1032,20 @@ func preprocessArgs(args []string) ([]string, *config.Context, string) {
 		args = []string{"."}
 	}
 
-	relPaths, err := relativePaths(root, args)
+	relPaths, err := relativePaths(root, args...)
 	exitWithError(err)
 
 	return uniqOrderedStr(relPaths), context, path
+}
+
+func preprocessArgsByToggle(args []string, skipArgPreprocess bool) (sources []string, context *config.Context, path string) {
+	if !skipArgPreprocess {
+		return preprocessArgs(args)
+	}
+
+	cwd, err := os.Getwd()
+	exitWithError(err)
+	_, context, path = preprocessArgs([]string{cwd})
+	sources = uniqOrderedStr(args)
+	return sources, context, path
 }

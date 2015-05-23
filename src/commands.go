@@ -110,13 +110,21 @@ func New(context *config.Context, opts *Options) *Commands {
 
 	stdin, stdout, stderr := os.Stdin, os.Stdout, os.Stderr
 
+	logger := log.New(stdin, stdout, stderr)
+
 	if opts != nil {
 		// should always start with /
 		opts.Path = path.Clean(path.Join("/", opts.Path))
 
 		if !opts.Force {
 			ignoresPath := filepath.Join(context.AbsPath, DriveIgnoreSuffix)
-			opts.IgnoreRegexp = readCommentedFileCompileRegexp(ignoresPath)
+			ignoreRegexp, regErr := combineIgnores(ignoresPath)
+
+			if regErr != nil {
+				logger.LogErrf("combining ignores from path %s and internally: %v\n", ignoresPath, regErr)
+			}
+
+			opts.IgnoreRegexp = ignoreRegexp
 		}
 
 		opts.StdoutIsTty = isatty.IsTerminal(stdout.Fd())
@@ -130,23 +138,26 @@ func New(context *config.Context, opts *Options) *Commands {
 		context: context,
 		rem:     r,
 		opts:    opts,
-		log:     log.New(stdin, stdout, stderr),
+		log:     logger,
 	}
 }
 
-func readCommentedFileCompileRegexp(p string) *regexp.Regexp {
-	clauses, err := readCommentedFile(p, "#")
-	if err != nil {
-		return nil
+func combineIgnores(ignoresPath string) (*regexp.Regexp, error) {
+	clauses, err := readCommentedFile(ignoresPath, "#")
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
 	}
+
+	clauses = append(clauses, internalIgnores()...)
 	if len(clauses) < 1 {
-		return nil
+		return nil, nil
 	}
+
 	regExComp, regErr := regexp.Compile(strings.Join(clauses, "|"))
 	if regErr != nil {
-		return nil
+		return nil, regErr
 	}
-	return regExComp
+	return regExComp, nil
 }
 
 func (g *Commands) taskStart(tasks int64) {

@@ -15,6 +15,7 @@
 package drive
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -38,11 +39,12 @@ type attribute struct {
 }
 
 type traversalSt struct {
-	file     *File
-	headPath string
-	depth    int
-	mask     int
-	inTrash  bool
+	file             *File
+	headPath         string
+	depth            int
+	mask             int
+	inTrash          bool
+	explicitNoPrompt bool
 }
 
 func (g *Commands) ListMatches() error {
@@ -85,19 +87,20 @@ func (g *Commands) ListMatches() error {
 	return nil
 }
 
-func (g *Commands) List() (err error) {
+func (g *Commands) List(byId bool) error {
+	var kvList []*keyValue
+
 	resolver := g.rem.FindByPath
-	if g.opts.InTrash {
+	if byId {
+		resolver = g.rem.FindById
+	} else if g.opts.InTrash {
 		resolver = g.rem.FindByPathTrashed
 	}
 
-	var kvList []*keyValue
-
 	for _, relPath := range g.opts.Sources {
 		r, rErr := resolver(relPath)
-		if rErr != nil {
-			g.log.LogErrf("%v: '%s'\n", rErr, relPath)
-			return
+		if rErr != nil && rErr != ErrPathNotExists {
+			return fmt.Errorf("%v: '%s'", rErr, relPath)
 		}
 
 		if r == nil {
@@ -105,7 +108,12 @@ func (g *Commands) List() (err error) {
 			continue
 		}
 
-		parentPath := g.parentPather(relPath)
+		parentPath := ""
+		if !byId {
+			parentPath = g.parentPather(relPath)
+		} else {
+			parentPath = r.Id
+		}
 
 		if remoteRootLike(parentPath) {
 			parentPath = ""
@@ -140,7 +148,8 @@ func (g *Commands) List() (err error) {
 		}
 	}
 	spin.stop()
-	return
+
+	return nil
 }
 
 func (g *Commands) ListShared() (err error) {
@@ -275,12 +284,19 @@ func (g *Commands) breadthFirst(travSt traversalSt, spin *playable) bool {
 
 	spin.pause()
 
-	fileChan := reqDoPage(req, g.opts.Hidden, g.opts.canPrompt())
+	canPrompt := !travSt.explicitNoPrompt
+	if canPrompt {
+		canPrompt = g.opts.canPrompt()
+	}
+
+	fileChan := reqDoPage(req, g.opts.Hidden, canPrompt)
 
 	spin.play()
 
 	var children []*File
 	onlyFiles := (g.opts.TypeMask & NonFolder) != 0
+
+	iterCount := uint64(0)
 
 	for file := range fileChan {
 		if file == nil {
@@ -302,16 +318,18 @@ func (g *Commands) breadthFirst(travSt traversalSt, spin *playable) bool {
 			continue
 		}
 		file.pretty(g.log, opt)
+		iterCount += 1
 	}
 
 	if !travSt.inTrash && !g.opts.InTrash {
 		for _, file := range children {
 			childSt := traversalSt{
-				depth:    travSt.depth,
-				file:     file,
-				headPath: opt.parent,
-				inTrash:  travSt.inTrash,
-				mask:     g.opts.TypeMask,
+				depth:            travSt.depth,
+				file:             file,
+				headPath:         opt.parent,
+				inTrash:          travSt.inTrash,
+				mask:             g.opts.TypeMask,
+				explicitNoPrompt: travSt.explicitNoPrompt,
 			}
 
 			if !g.breadthFirst(childSt, spin) {
@@ -320,7 +338,8 @@ func (g *Commands) breadthFirst(travSt traversalSt, spin *playable) bool {
 		}
 		return true
 	}
-	return len(children) >= 1
+
+	return iterCount >= 1
 }
 
 func isMinimal(mask int) bool {

@@ -97,7 +97,10 @@ type File struct {
 	// The onwers of this file.
 	OwnerNames []string
 	// Permissions contains the overall permissions for this file
-	Permissions []*drive.Permission
+	Permissions           []*drive.Permission
+	LastModifyingUsername string
+	OriginalFilename      string
+	Labels                *drive.FileLabels
 }
 
 func NewRemoteFile(f *drive.File) *File {
@@ -115,13 +118,16 @@ func NewRemoteFile(f *drive.File) *File {
 		MimeType:      f.MimeType,
 		ModTime:       mtime,
 		// We must convert each title to match that on the FS.
-		Name:           urlToPath(f.Title, true),
-		Size:           f.FileSize,
-		Shared:         f.Shared,
-		UserPermission: f.UserPermission,
-		Version:        f.Version,
-		OwnerNames:     f.OwnerNames,
-		Permissions:    f.Permissions,
+		Name:                  urlToPath(f.Title, true),
+		Size:                  f.FileSize,
+		Shared:                f.Shared,
+		UserPermission:        f.UserPermission,
+		Version:               f.Version,
+		OwnerNames:            f.OwnerNames,
+		Permissions:           f.Permissions,
+		LastModifyingUsername: f.LastModifyingUserName,
+		OriginalFilename:      f.OriginalFilename,
+		Labels:                f.Labels,
 	}
 }
 

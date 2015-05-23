@@ -27,7 +27,7 @@ type copyArgs struct {
 	dest     *File
 }
 
-func (g *Commands) Copy() error {
+func (g *Commands) Copy(byId bool) error {
 	argc := len(g.opts.Sources)
 	if argc < 2 {
 		return fmt.Errorf("expecting src [src1....] dest got: %v", g.opts.Sources)
@@ -52,8 +52,13 @@ func (g *Commands) Copy() error {
 		}
 	}
 
+	srcResolver := g.rem.FindByPath
+	if byId {
+		srcResolver = g.rem.FindById
+	}
+
 	for _, srcPath := range sources {
-		srcFile, srcErr := g.rem.FindByPath(srcPath)
+		srcFile, srcErr := srcResolver(srcPath)
 		if srcErr != nil {
 			g.log.LogErrf("%s: %v\n", srcPath, srcErr)
 			continue

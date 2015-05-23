@@ -16,18 +16,40 @@ package drive
 
 import (
 	"fmt"
+	// "path/filepath"
 )
 
-func (g *Commands) Trash() (err error) {
-	return g.reduceForTrash(g.opts.Sources, true, false)
+type trashOpt struct {
+	permanent bool
+	toTrash   bool
+	byId      bool
 }
 
-func (g *Commands) Delete() (err error) {
-	return g.reduceForTrash(g.opts.Sources, true, true)
+func (g *Commands) Trash(byId bool) (err error) {
+	opt := trashOpt{
+		toTrash:   true,
+		permanent: false,
+		byId:      byId,
+	}
+	return g.reduceForTrash(g.opts.Sources, &opt)
 }
 
-func (g *Commands) Untrash() (err error) {
-	return g.reduceForTrash(g.opts.Sources, false, false)
+func (g *Commands) Delete(byId bool) (err error) {
+	opt := trashOpt{
+		toTrash:   true,
+		permanent: true,
+		byId:      byId,
+	}
+	return g.reduceForTrash(g.opts.Sources, &opt)
+}
+
+func (g *Commands) Untrash(byId bool) (err error) {
+	opt := trashOpt{
+		toTrash:   false,
+		permanent: false,
+		byId:      byId,
+	}
+	return g.reduceForTrash(g.opts.Sources, &opt)
 }
 
 func (g *Commands) EmptyTrash() error {
@@ -41,11 +63,12 @@ func (g *Commands) EmptyTrash() error {
 	defer spin.stop()
 
 	travSt := traversalSt{
-		depth:    -1,
-		file:     rootFile,
-		headPath: "/",
-		inTrash:  true,
-		mask:     g.opts.TypeMask,
+		depth:            -1,
+		file:             rootFile,
+		headPath:         "/",
+		inTrash:          true,
+		mask:             g.opts.TypeMask,
+		explicitNoPrompt: true,
 	}
 
 	if !g.breadthFirst(travSt, spin) {
@@ -53,7 +76,7 @@ func (g *Commands) EmptyTrash() error {
 	}
 
 	if g.opts.canPrompt() {
-		g.log.Logln("This oepration is irreversible. Empty trash! ")
+		g.log.Logln("This operation is irreversible. Empty trash! ")
 
 		if !promptForChanges() {
 			g.log.Logln("Aborted emptying trash")
@@ -68,28 +91,39 @@ func (g *Commands) EmptyTrash() error {
 	return err
 }
 
-func (g *Commands) trasher(relToRoot string, toTrash bool) (change *Change, err error) {
+func (g *Commands) trasher(relToRoot string, opt *trashOpt) (*Change, error) {
 	var file *File
-	if relToRoot == "/" && toTrash {
+	if relToRoot == "/" && opt.toTrash {
 		return nil, fmt.Errorf("Will not try to trash root.")
 	}
-	if toTrash {
-		file, err = g.rem.FindByPath(relToRoot)
-	} else {
-		file, err = g.rem.FindByPathTrashed(relToRoot)
+	resolver := g.rem.FindByPathTrashed
+	if opt.byId {
+		resolver = g.rem.FindById
+	} else if opt.toTrash {
+		resolver = g.rem.FindByPath
 	}
 
+	file, err := resolver(relToRoot)
 	if err != nil {
-		return
+		return nil, err
 	}
 
-	change = &Change{Path: relToRoot}
-	if toTrash {
+	if opt.byId {
+		if file.Labels != nil {
+			if file.Labels.Trashed == opt.toTrash {
+				return nil, fmt.Errorf("toTrash=%v set yet already file.Trash=%v", opt.toTrash, file.Labels.Trashed)
+			}
+		}
+		relToRoot = fmt.Sprintf("%s (%s)", relToRoot, file.Name)
+	}
+
+	change := &Change{Path: relToRoot}
+	if opt.toTrash {
 		change.Dest = file
 	} else {
 		change.Src = file
 	}
-	return
+	return change, nil
 }
 
 func (g *Commands) trashByMatch(inTrash, permanent bool) error {
@@ -125,7 +159,12 @@ func (g *Commands) trashByMatch(inTrash, permanent bool) error {
 		return nil
 	}
 
-	return g.playTrashChangeList(cl, toTrash, permanent)
+	opt := trashOpt{
+		toTrash:   toTrash,
+		permanent: permanent,
+	}
+
+	return g.playTrashChangeList(cl, &opt)
 }
 
 func (g *Commands) TrashByMatch() error {
@@ -140,10 +179,10 @@ func (g *Commands) DeleteByMatch() error {
 	return g.trashByMatch(false, true)
 }
 
-func (g *Commands) reduceForTrash(args []string, toTrash, permanent bool) error {
+func (g *Commands) reduceForTrash(args []string, opt *trashOpt) error {
 	var cl []*Change
 	for _, relToRoot := range args {
-		c, cErr := g.trasher(relToRoot, toTrash)
+		c, cErr := g.trasher(relToRoot, opt)
 		if cErr != nil {
 			g.log.LogErrf("\033[91m'%s': %v\033[00m\n", relToRoot, cErr)
 		} else if c != nil {
@@ -155,24 +194,24 @@ func (g *Commands) reduceForTrash(args []string, toTrash, permanent bool) error 
 	if !ok {
 		return nil
 	}
-	if permanent && g.opts.canPrompt() {
+	if opt.permanent && g.opts.canPrompt() {
 		if !promptForChanges("This operation is irreversible. Continue [Y/N] ") {
 			return nil
 		}
 	}
-	return g.playTrashChangeList(cl, toTrash, permanent)
+	return g.playTrashChangeList(cl, opt)
 }
 
-func (g *Commands) playTrashChangeList(cl []*Change, toTrash, permanent bool) (err error) {
+func (g *Commands) playTrashChangeList(cl []*Change, opt *trashOpt) (err error) {
 	trashSize, unTrashSize := reduceToSize(cl, SelectDest|SelectSrc)
 	g.taskStart(trashSize + unTrashSize)
 
 	var fn func(*Change) error
-	if permanent {
+	if opt.permanent {
 		fn = g.remoteDelete
 	} else {
 		fn = g.remoteUntrash
-		if toTrash {
+		if opt.toTrash {
 			fn = g.remoteTrash
 		}
 	}

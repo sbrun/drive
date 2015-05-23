@@ -19,7 +19,13 @@ import (
 	"path/filepath"
 )
 
-func (g *Commands) Move() (err error) {
+type moveOpt struct {
+	src  string
+	dest string
+	byId bool
+}
+
+func (g *Commands) Move(byId bool) (err error) {
 	argc := len(g.opts.Sources)
 	if argc < 2 {
 		return fmt.Errorf("move: expected <src> [src...] <dest>, instead got: %v", g.opts.Sources)
@@ -35,47 +41,60 @@ func (g *Commands) Move() (err error) {
 			return fmt.Errorf("%s cannot be nested into %s", src, dest)
 		}
 
-		err = g.move(src, dest)
+		opt := moveOpt{
+			src:  src,
+			dest: dest,
+			byId: byId,
+		}
+
+		err = g.move(&opt)
 		if err != nil {
 			// TODO: Actually throw the error? Impact on UX if thrown?
-			fmt.Printf("%s: %v\n", src, err)
+			fmt.Printf("move: %s: %v\n", src, err)
 		}
 	}
 
 	return nil
 }
 
-func (g *Commands) move(src, dest string) (err error) {
+func (g *Commands) move(opt *moveOpt) (err error) {
 	var newParent, remSrc *File
 
-	if remSrc, err = g.rem.FindByPath(src); err != nil {
-		return fmt.Errorf("src('%s') %v", src, err)
+	srcResolver := g.rem.FindByPath
+	if opt.byId {
+		srcResolver = g.rem.FindById
+	}
+
+	if remSrc, err = srcResolver(opt.src); err != nil {
+		return fmt.Errorf("src('%s') %v", opt.src, err)
 	}
 
 	if remSrc == nil {
-		return fmt.Errorf("src: '%s' could not be found", src)
+		return fmt.Errorf("src: '%s' could not be found", opt.src)
 	}
 
-	if newParent, err = g.rem.FindByPath(dest); err != nil {
-		return fmt.Errorf("dest: '%s' %v", dest, err)
+	if newParent, err = g.rem.FindByPath(opt.dest); err != nil {
+		return fmt.Errorf("dest: '%s' %v", opt.dest, err)
 	}
 
 	if newParent == nil || !newParent.IsDir {
-		return fmt.Errorf("dest: '%s' must be an existant folder", dest)
+		return fmt.Errorf("dest: '%s' must be an existant folder", opt.dest)
 	}
 
-	parentPath := g.parentPather(src)
-	oldParent, parErr := g.rem.FindByPath(parentPath)
-	if parErr != nil && parErr != ErrPathNotExists {
-		return parErr
+	if !opt.byId {
+		parentPath := g.parentPather(opt.src)
+		oldParent, parErr := g.rem.FindByPath(parentPath)
+		if parErr != nil && parErr != ErrPathNotExists {
+			return parErr
+		}
+
+		// TODO: If oldParent is not found, retry since it may have been moved temporarily at least
+		if oldParent != nil && oldParent.Id == newParent.Id {
+			return nil
+		}
 	}
 
-	// TODO: If oldParent is not found, retry since it may have been moved temporarily at least
-	if oldParent != nil && oldParent.Id == newParent.Id {
-		return nil
-	}
-
-	newFullPath := filepath.Join(dest, remSrc.Name)
+	newFullPath := filepath.Join(opt.dest, remSrc.Name)
 
 	// Check for a duplicate
 	var dupCheck *File
@@ -95,14 +114,17 @@ func (g *Commands) move(src, dest string) (err error) {
 
 	// Avoid self-nesting
 	if remSrc.Id == newParent.Id {
-		return fmt.Errorf("move: cannot move '%s' to itself", src)
+		return fmt.Errorf("move: cannot move '%s' to itself", opt.src)
 	}
 
 	if err = g.rem.insertParent(remSrc.Id, newParent.Id); err != nil {
 		return err
 	}
 
-	return g.removeParent(remSrc.Id, src)
+	if opt.byId { // TODO: Also take out this current parent
+		return nil
+	}
+	return g.removeParent(remSrc.Id, opt.src)
 }
 
 func (g *Commands) removeParent(fileId, relToRootPath string) error {
@@ -117,13 +139,17 @@ func (g *Commands) removeParent(fileId, relToRootPath string) error {
 	return g.rem.removeParent(fileId, parent.Id)
 }
 
-func (g *Commands) Rename() error {
+func (g *Commands) Rename(byId bool) error {
 	if len(g.opts.Sources) < 2 {
 		return fmt.Errorf("rename: expecting <src> <newname>")
 	}
 
 	src := g.opts.Sources[0]
-	remSrc, err := g.rem.FindByPath(src)
+	resolver := g.rem.FindByPath
+	if byId {
+		resolver = g.rem.FindById
+	}
+	remSrc, err := resolver(src)
 	if err != nil {
 		return fmt.Errorf("%s: %v", src, err)
 	}
@@ -131,7 +157,12 @@ func (g *Commands) Rename() error {
 		return fmt.Errorf("%s does not exist", src)
 	}
 
-	parentPath := g.parentPather(src)
+	var parentPath string
+	if !byId {
+		parentPath = g.parentPather(src)
+	} else {
+		parentPath = g.opts.Path
+	}
 
 	newName := g.opts.Sources[1]
 	urlBoundName := urlToPath(newName, true)

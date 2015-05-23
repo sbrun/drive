@@ -127,14 +127,19 @@ func stringToAccountType() func(string) AccountType {
 var reverseRoleResolve = stringToRole()
 var reverseAccountTypeResolve = stringToAccountType()
 
-func (g *Commands) resolveRemotePaths(relToRootPaths []string) (files []*File) {
+func (g *Commands) resolveRemotePaths(relToRootPaths []string, byId bool) (files []*File) {
 	var wg sync.WaitGroup
+
+	resolver := g.rem.FindByPath
+	if byId {
+		resolver = g.rem.FindById
+	}
 
 	wg.Add(len(relToRootPaths))
 	for _, relToRoot := range relToRootPaths {
 		go func(p string, wgg *sync.WaitGroup) {
 			defer wgg.Done()
-			file, err := g.rem.FindByPath(p)
+			file, err := resolver(p)
 			if err != nil || file == nil {
 				return
 			}
@@ -162,12 +167,12 @@ func emailsToIds(g *Commands, emails []string) map[string]string {
 	return emailToIds
 }
 
-func (c *Commands) Unshare() (err error) {
-	return c.share(true)
+func (c *Commands) Unshare(byId bool) (err error) {
+	return c.share(true, byId)
 }
 
-func (c *Commands) Share() (err error) {
-	return c.share(false)
+func (c *Commands) Share(byId bool) (err error) {
+	return c.share(false, byId)
 }
 
 func showPromptShareChanges(logy *log.Logger, change *shareChange) bool {
@@ -238,8 +243,8 @@ func (c *Commands) playShareChanges(change *shareChange) error {
 	return nil
 }
 
-func (c *Commands) share(revoke bool) (err error) {
-	files := c.resolveRemotePaths(c.opts.Sources)
+func (c *Commands) share(revoke, byId bool) (err error) {
+	files := c.resolveRemotePaths(c.opts.Sources, byId)
 
 	var role Role
 	var accountType AccountType

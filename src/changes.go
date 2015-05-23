@@ -102,7 +102,13 @@ func (g *Commands) resolveToLocalFile(relToRoot, fsPath string) (local *File, er
 		err = statErr
 		return
 	}
+
 	if localinfo != nil {
+		if namedPipe(localinfo.Mode()) {
+			err = fmt.Errorf("%s (%s) is a named pipe, yet not reading from it", relToRoot, fsPath)
+			return
+		}
+
 		local = NewLocalFile(fsPath, localinfo)
 	}
 
@@ -267,7 +273,7 @@ func (g *Commands) resolveChangeListRecv(
 		for _, dup := range clashes {
 			g.log.LogErrf("\033[91mX\033[00m %s/%v \"%v\"\n", p, dup.Name, dup.Id)
 		}
-		err = fmt.Errorf("clashes detected. use `%s` to override this behavior", CLIOptionIgnoreNameClashes)
+		err = ErrClashesDetected
 		return
 	}
 
@@ -301,12 +307,17 @@ func (g *Commands) resolveChangeListRecv(
 					joined = strings.Join([]string{p, l.Name()}, "/")
 				}
 				childChanges, cErr := g.resolveChangeListRecv(isPush, p, joined, l.remote, l.local)
-				if cErr != nil && cErr != ErrPathNotExists {
+				if cErr == nil {
+					*cl = append(*cl, childChanges...)
+					continue
+				}
+
+				if cErr == ErrClashesDetected {
+					break
+				} else if cErr != ErrPathNotExists {
 					g.log.LogErrf("%s: %v\n", p, cErr)
 					break
 				}
-
-				*cl = append(*cl, childChanges...)
 			}
 		}(&wg, isPush, &cl, p, dirlist[i:end])
 

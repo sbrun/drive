@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 
 	spinner "github.com/odeke-em/cli-spinner"
@@ -54,6 +55,13 @@ func noopPlayable() *playable {
 		reset: noop,
 		stop:  noop,
 	}
+}
+
+func internalIgnores() (ignores []string) {
+	if runtime.GOOS == OSLinuxKey {
+		ignores = append(ignores, "\\.\\s*desktop$")
+	}
+	return ignores
 }
 
 func newPlayable(freq int64) *playable {
@@ -186,7 +194,21 @@ func (f *File) serializeAsDesktopEntry(destPath string, urlMExt *urlMimeTypeExt)
 	if err != nil {
 		return 0, err
 	}
-	defer handle.Close()
+
+	defer func() {
+		handle.Close()
+		chmodErr := os.Chmod(destPath, 0755)
+
+		if chmodErr != nil {
+			fmt.Fprintf(os.Stderr, "%s: [desktopEntry]::chmod %v\n", destPath, chmodErr)
+		}
+
+		chTimeErr := os.Chtimes(destPath, f.ModTime, f.ModTime)
+		if chTimeErr != nil {
+			fmt.Fprintf(os.Stderr, "%s: [desktopEntry]::chtime %v\n", destPath, chTimeErr)
+		}
+	}()
+
 	icon := strings.Replace(deskEnt.icon, UnescapedPathSep, MimeTypeJoiner, -1)
 
 	return fmt.Fprintf(handle, "[Desktop Entry]\nIcon=%s\nName=%s\nType=%s\nURL=%s\n",
