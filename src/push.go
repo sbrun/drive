@@ -28,7 +28,6 @@ import (
 
 	"github.com/odeke-em/drive/config"
 	"github.com/odeke-em/dts/trie"
-	ration "github.com/odeke-em/rationer"
 )
 
 // Pushes to remote if local path exists and in a gd context. If path is a
@@ -246,11 +245,6 @@ func (g *Commands) playPushChanges(cl []*Change, opMap *map[Operation]sizeCounte
 		}
 	}()
 
-	capacity := uint64(100)
-	rationer := ration.NewRationer(capacity)
-
-	loader := rationer.Run()
-
 	addTrie := trie.New(trie.AsciiAlphabet)
 	delTrie := trie.New(trie.AsciiAlphabet)
 	modTrie := trie.New(trie.AsciiAlphabet)
@@ -269,32 +263,27 @@ func (g *Commands) playPushChanges(cl []*Change, opMap *map[Operation]sizeCounte
 	}
 
 	// Schedule them
-	trieOperator(addTrie, g.remoteAdd, loader)
-	trieOperator(modTrie, g.remoteMod, loader)
-	trieOperator(delTrie, g.remoteDelete, loader)
-
-	loader <- ration.Sentinel
-	rationer.Wait()
+	trieOperator(addTrie, g.remoteAdd)
+	trieOperator(modTrie, g.remoteMod)
+	trieOperator(delTrie, g.remoteDelete)
 
 	g.taskFinish()
 	return err
 }
 
-func trieOperator(t *trie.Trie, f func(*Change) error, loader chan interface{}) {
-	walk := t.Walk()
-
-	for divNode := range walk {
-		loader <- func(itt *interface{}) ration.Job {
-			it := *itt
-			return func() interface{} {
-				cast, ok := it.(*Change)
-				if !ok {
-					return fmt.Errorf("cast to \"Change\" failed")
-				}
-				return f(cast)
-			}
-		}(&divNode)
+func trieOperator(t *trie.Trie, f func(*Change) error) {
+	throttle := time.Tick(1e9)
+	apply := func(it interface{}) {
+		cast, ok := it.(*Change)
+		if !ok {
+			fmt.Errorf("cast to \"Change\" failed")
+		} else {
+			f(cast)
+		}
+		<-throttle
 	}
+
+	t.BreadthFirstApply(apply)
 }
 
 func lonePush(g *Commands, parent, absPath, path string) (cl []*Change, err error) {
