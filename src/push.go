@@ -28,7 +28,6 @@ import (
 
 	"github.com/odeke-em/drive/config"
 	"github.com/odeke-em/dts/trie"
-	expb "github.com/odeke-em/exponential-backoff"
 )
 
 // Pushes to remote if local path exists and in a gd context. If path is a
@@ -272,23 +271,7 @@ func (g *Commands) playPushChanges(cl []*Change, opMap *map[Operation]sizeCounte
 	return err
 }
 
-func retryableChangeOp(f func() (interface{}, error)) *expb.ExponentialBacker {
-	return &expb.ExponentialBacker{
-		Do:          f,
-		StatusCheck: retryableErrorCheck,
-		RetryCount:  10,
-	}
-}
-
-func consumeChangeOpResult(v interface{}, err error) {
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "result:: %v\n", err)
-	}
-}
-
 func trieOperator(t *trie.Trie, f func(*Change) error) {
-	throttle := time.Tick(ThrottledRequestsDuration)
-
 	apply := func(it interface{}) {
 		cast, ok := it.(*Change)
 		if !ok {
@@ -296,15 +279,7 @@ func trieOperator(t *trie.Trie, f func(*Change) error) {
 			return
 		}
 
-		emitter := func() (interface{}, error) {
-			err := f(cast)
-			<-throttle
-			return err, err
-		}
-
-		retrier := retryableChangeOp(emitter)
-
-		expb.ExponentialBackOff(retrier, consumeChangeOpResult)
+		f(cast)
 	}
 
 	t.BreadthFirstApply(apply)

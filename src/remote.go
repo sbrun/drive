@@ -25,9 +25,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/odeke-em/drive/config"
-	"github.com/odeke-em/goauth2/oauth"
 	drive "github.com/odeke-em/google-api-go-client/drive/v2"
+
+	"github.com/odeke-em/drive/config"
+	expb "github.com/odeke-em/exponential-backoff"
+	"github.com/odeke-em/goauth2/oauth"
 	"github.com/odeke-em/statos"
 )
 
@@ -512,6 +514,15 @@ func (r *Remote) copy(newName, parentId string, srcFile *File) (*File, error) {
 	return NewRemoteFile(copied), nil
 }
 
+func retryableChangeOp(f func() (interface{}, error)) *expb.ExponentialBacker {
+	return &expb.ExponentialBacker{
+		Do:          f,
+		StatusCheck: retryableErrorCheck,
+		RetryCount:  MaxFailedRetryCount,
+		Debug:       false,
+	}
+}
+
 func (r *Remote) UpsertByComparison(args *upsertOpt) (f *File, err error) {
 	/*
 	   // TODO: (@odeke-em) decide:
@@ -537,6 +548,8 @@ func (r *Remote) UpsertByComparison(args *upsertOpt) (f *File, err error) {
 
 	bd := statos.NewReader(body)
 
+	resultLoad := make(chan *tuple)
+
 	go func() {
 		commChan := bd.ProgressChan()
 		for n := range commChan {
@@ -544,19 +557,44 @@ func (r *Remote) UpsertByComparison(args *upsertOpt) (f *File, err error) {
 		}
 	}()
 
-	mediaInserted := false
+	go func() {
+		emitter := func() (interface{}, error) {
+			f, mediaInserted, err := r.upsertByComparison(bd, args)
+			return &tuple{first: f, second: mediaInserted, last: err}, err
+		}
 
-	f, mediaInserted, err = r.upsertByComparison(bd, args)
+		retrier := retryableChangeOp(emitter)
 
-	// Case in which for example just Chtime-ing
-	if !mediaInserted && args.dest != nil {
-		chunks := chunkInt64(args.dest.Size)
-		for n := range chunks {
-			r.progressChan <- n
+		res, err := expb.ExponentialBackOffSync(retrier)
+		resultLoad <- &tuple{first: res, last: err}
+	}()
+
+	ppr := <-resultLoad
+	if ppr != nil {
+		pr, prOk := ppr.first.(*tuple)
+		if prOk {
+			ff, ok := pr.first.(*File)
+			if ok {
+				f = ff
+			}
+
+			mediaInserted, mOk := pr.second.(bool)
+
+			if mOk && !mediaInserted && f != nil {
+				chunks := chunkInt64(f.Size)
+				for n := range chunks {
+					r.progressChan <- n
+				}
+			}
+
+			errV, eOk := pr.last.(error)
+			if eOk {
+				err = errV
+			}
 		}
 	}
 
-	return
+	return f, err
 }
 
 func (r *Remote) findShared(p []string) (chan *File, error) {

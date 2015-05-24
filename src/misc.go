@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	spinner "github.com/odeke-em/cli-spinner"
@@ -32,7 +33,8 @@ const (
 )
 
 var (
-	ThrottledRequestsDuration = time.Duration(1e9 / 20) // Arbitrary value
+	MaxFailedRetryCount       = uint32(20)             // Arbitrary value
+	ThrottledRequestsDuration = time.Duration(1e9 / 2) // Arbitrary value
 )
 
 var BytesPerKB = float64(1024)
@@ -48,20 +50,35 @@ type desktopEntry struct {
 	icon string
 }
 
+type tuple struct {
+	first  interface{}
+	second interface{}
+	last   interface{}
+}
+
 func retryableErrorCheck(v interface{}) (ok, retryable bool) {
-	err, ok := v.(error)
+	pr, pOk := v.(*tuple)
+	if pr == nil || !pOk {
+		return false, true
+	}
+
+	err, ok := pr.first.(error)
 	if !ok || err == nil {
 		return true, false
 	}
 
-	switch err.Error() {
-	case MsgUserLimitExceeded:
-		return false, true
-	case MsgInternalServerError:
-		return false, true
-	default:
-		return false, false
+	if false { // For now noop for specific errors, just treat each error as retryable
+		switch err.Error() {
+		case MsgUserLimitExceeded:
+			return false, true
+		case MsgInternalServerError:
+			return false, true
+		default:
+			return false, false
+		}
 	}
+
+	return false, true
 }
 
 type playable struct {
@@ -396,8 +413,12 @@ var regExtMap = func() map[*regexp.Regexp]string {
 
 func _mimeTyper() func(string) string {
 	cache := map[string]string{}
+	var mu sync.Mutex
 
 	return func(ext string) string {
+		mu.Lock()
+		defer mu.Unlock()
+
 		memoized, ok := cache[ext]
 		if ok {
 			return memoized
