@@ -519,7 +519,7 @@ func retryableChangeOp(f func() (interface{}, error)) *expb.ExponentialBacker {
 		Do:          f,
 		StatusCheck: retryableErrorCheck,
 		RetryCount:  MaxFailedRetryCount,
-		Debug:       false,
+		Debug:       true,
 	}
 }
 
@@ -534,16 +534,14 @@ func (r *Remote) UpsertByComparison(args *upsertOpt) (f *File, err error) {
 		return
 	}
 
-	var body *os.File
-	body, err = os.Open(args.fsAbsPath)
-	defer func() {
-		if body != nil {
-			body.Close()
-		}
-	}()
+	var body io.Reader
 
-	if err != nil && !args.src.IsDir {
-		return
+	if !args.src.IsDir {
+		body, err = os.Open(args.fsAbsPath)
+		if err != nil {
+			fmt.Println("err encountered")
+			return
+		}
 	}
 
 	bd := statos.NewReader(body)

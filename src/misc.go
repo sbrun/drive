@@ -20,6 +20,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,8 +34,12 @@ const (
 )
 
 var (
-	MaxFailedRetryCount       = uint32(20)             // Arbitrary value
-	ThrottledRequestsDuration = time.Duration(1e9 / 2) // Arbitrary value
+	MaxFailedRetryCount       = uint32(20)              // Arbitrary value
+	ThrottledRequestsDuration = time.Duration(1e9 / 10) // Arbitrary value
+)
+
+var (
+	DefaultMaxProcs = 10
 )
 
 var BytesPerKB = float64(1024)
@@ -435,6 +440,14 @@ func _mimeTyper() func(string) string {
 		cache[ext] = memoized
 		return memoized
 	}
+}
+
+func maxProcs() int {
+	maxProcs, err := strconv.ParseInt(os.Getenv("GOMAXPROCS"), 10, 0)
+	if err != nil || maxProcs < 1 {
+		return DefaultMaxProcs
+	}
+	return int(maxProcs)
 }
 
 var mimeTypeFromExt = _mimeTyper()

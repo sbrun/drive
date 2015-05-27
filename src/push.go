@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/odeke-em/drive/config"
@@ -263,26 +264,89 @@ func (g *Commands) playPushChanges(cl []*Change, opMap *map[Operation]sizeCounte
 	}
 
 	// Schedule them
-	trieOperator(addTrie, g.remoteAdd)
-	trieOperator(modTrie, g.remoteMod)
-	trieOperator(delTrie, g.remoteDelete)
+	g.mapOnTrie(addTrie, g.remoteAdd)
+	g.mapOnTrie(modTrie, g.remoteMod)
+	g.mapOnTrie(delTrie, g.remoteDelete)
 
 	g.taskFinish()
 	return err
 }
 
-func trieOperator(t *trie.Trie, f func(*Change) error) {
-	apply := func(it interface{}) {
-		cast, ok := it.(*Change)
-		if !ok {
-			fmt.Errorf("cast to \"Change\" failed")
-			return
+func (g *Commands) mapOnTrie(t *trie.Trie, f func(*Change) error) {
+	// Firstly operate on directories
+	t.Tag(trie.PotentialDir, "dir")
+
+	pDirs := make(chan interface{})
+	go func() {
+		defer close(pDirs)
+		dirs := t.Match(trie.PotentialDir)
+		for dir := range dirs {
+			if !dir.Eos {
+				continue
+			}
+			pDirs <- dir.Data
+		}
+	}()
+
+	g.mapChanges(pDirs, f)
+
+	walk := t.BreadthFirstWalk()
+	g.mapChanges(walk, f)
+}
+
+func (g *Commands) mapChanges(srcChan chan interface{}, f func(*Change) error) {
+	spinning := true
+	throttle := time.Tick(ThrottledRequestsDuration)
+	perRequestThrottle := time.Tick(ThrottledRequestsDuration / 2)
+
+	var i, doneCount, nMax int
+	nMax = maxProcs()
+
+	for spinning {
+		var wg sync.WaitGroup
+
+		i = 0
+		doneCount = 0
+
+		wg.Add(nMax)
+
+		for i < nMax {
+			i += 1
+			item, hasContent := <-srcChan
+			if !hasContent {
+				spinning = false
+				break
+			}
+
+			ch, ok := item.(*Change)
+			if !ok {
+				g.log.LogErrf("cast %v to \"Change\" failed\n", item)
+				continue
+			}
+
+			doneCount += 1
+			go func(cch *Change, wgg *sync.WaitGroup) {
+				defer wgg.Done()
+				err := f(cch)
+				if err != nil {
+					g.log.LogErrf("%s: %v\n", cch.Path, err)
+				}
+				<-perRequestThrottle
+			}(ch, &wg)
+			<-perRequestThrottle
 		}
 
-		f(cast)
-	}
+		for {
+			if doneCount >= nMax {
+				break
+			}
+			doneCount += 1
+			wg.Done()
+		}
 
-	t.BreadthFirstApply(apply)
+		wg.Wait()
+		<-throttle
+	}
 }
 
 func lonePush(g *Commands, parent, absPath, path string) (cl []*Change, err error) {
@@ -352,7 +416,7 @@ func (g *Commands) remoteMod(change *Change) (err error) {
 
 	rem, err := g.rem.UpsertByComparison(&args)
 	if err != nil {
-		g.log.LogErrf("%s: %v\n", change.Path, err)
+		// g.log.LogErrf("%s: %v\n", change.Path, err)
 		return
 	}
 	if rem == nil {
@@ -455,6 +519,7 @@ func (g *Commands) remoteMkdirAll(d string) (file *File, err error) {
 		parentId: parent.Id,
 		src:      remoteFile,
 	}
+
 	parent, parentErr = g.rem.UpsertByComparison(&args)
 	if parentErr == nil && parent != nil {
 		index := parent.ToIndex()
