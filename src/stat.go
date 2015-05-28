@@ -122,15 +122,25 @@ func prettyFileStat(logf log.Loggerf, relToRootPath string, file *File) {
 		&keyValue{"Bytes", fmt.Sprintf("%v", file.Size)},
 		&keyValue{"Size", prettyBytes(file.Size)},
 		&keyValue{"DirType", dirType},
+		&keyValue{"VersionNumber", fmt.Sprintf("%v", file.Version)},
 		&keyValue{"MimeType", file.MimeType},
 		&keyValue{"Etag", file.Etag},
 		&keyValue{"ModTime", fmt.Sprintf("%v", file.ModTime)},
+		&keyValue{"LastViewedByMe", fmt.Sprintf("%v", file.LastViewedByMeTime)},
+		&keyValue{"Shared", fmt.Sprintf("%v", file.Shared)},
 		&keyValue{"Owners", sepJoin(" & ", file.OwnerNames...)},
 		&keyValue{"LastModifyingUsername", file.LastModifyingUsername},
 	}
 
 	if file.Name != file.OriginalFilename {
 		kvList = append(kvList, &keyValue{"OriginalFilename", file.OriginalFilename})
+	}
+
+	if !file.IsDir {
+		kvList = append(kvList, &keyValue{"Md5Checksum", file.Md5Checksum})
+
+		// By default, folders are non-copyable, but drive implements recursively copying folders
+		kvList = append(kvList, &keyValue{"Copyable", fmt.Sprintf("%v", file.Copyable)})
 	}
 
 	if file.Labels != nil {
@@ -142,9 +152,6 @@ func prettyFileStat(logf log.Loggerf, relToRootPath string, file *File) {
 		)
 	}
 
-	if !file.IsDir {
-		kvList = append(kvList, &keyValue{"Md5Checksum", file.Md5Checksum})
-	}
 	for _, kv := range kvList {
 		logf("%-25s %-30v\n", kv.key, kv.value.(string))
 	}

@@ -47,7 +47,7 @@ func (g *Commands) Push() (err error) {
 	spin := g.playabler()
 	spin.play()
 
-	// To Ensure mount points are cleared in the event of external exceptios
+	// To Ensure mount points are cleared in the event of external exceptions
 	go func() {
 		_ = <-c
 		spin.stop()

@@ -52,6 +52,10 @@ const (
 	QuitShortKey      = "q"
 	YesShortKey       = "Y"
 	QuitLongKey       = "quit"
+	MatchesKey        = "matches"
+	HiddenKey         = "hidden"
+	NoPromptKey       = "no-prompt"
+	TrashedKey        = "trashed"
 	DriveRepoRelPath  = "github.com/odeke-em/drive"
 )
 

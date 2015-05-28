@@ -31,6 +31,8 @@ import (
 const (
 	MimeTypeJoiner      = "-"
 	RemoteDriveRootPath = "My Drive"
+
+	FmtTimeString = "2006-01-02T15:04:05.000Z"
 )
 
 var (
@@ -103,6 +105,18 @@ func noopPlayable() *playable {
 		reset: noop,
 		stop:  noop,
 	}
+}
+
+func parseTime(ts string, round bool) (t time.Time) {
+	t, _ = time.Parse(FmtTimeString, ts)
+	if !round {
+		return
+	}
+	return t.Round(time.Second)
+}
+
+func parseTimeAndRound(ts string) (t time.Time) {
+	return parseTime(ts, true)
 }
 
 func internalIgnores() (ignores []string) {
@@ -394,6 +408,19 @@ var regExtStrMap = map[string]string{
 	"jpe?g": "image/jpeg",
 
 	"odt": "application/vnd.oasis.opendocument.text",
+	"odm": "application/vnd.oasis.opendocument.text-master",
+	"ott": "application/vnd.oasis.opendocument.text-template",
+	"ods": "application/vnd.oasis.opendocument.sheet",
+	"ots": "application/vnd.oasis.opendocument.spreadsheet-template",
+	"odg": "application/vnd.oasis.opendocument.graphics",
+	"otg": "application/vnd.oasis.opendocument.graphics-template",
+	"oth": "application/vnd.oasis.opendocument.text-web",
+	"odp": "application/vnd.oasis.opendocument.presentation",
+	"otp": "application/vnd.oasis.opendocument.presentation-template",
+	"odi": "application/vnd.oasis.opendocument.image",
+	"odb": "application/vnd.oasis.opendocument.database",
+	"oxt": "application/vnd.openofficeorg.extension",
+
 	"rtf": "application/rtf",
 	"pdf": "application/pdf",
 
