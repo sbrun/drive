@@ -29,6 +29,8 @@ import (
 
 	"github.com/odeke-em/drive/config"
 	"github.com/odeke-em/dts/trie"
+
+	expb "github.com/odeke-em/exponential-backoff"
 )
 
 // Pushes to remote if local path exists and in a gd context. If path is a
@@ -217,6 +219,22 @@ func (g *Commands) deserializeIndex(identifier string) *config.Index {
 	return index
 }
 
+func (g *Commands) remoteLevelNoop(p string) error {
+	return nil
+}
+
+func (g *Commands) remoteLevelMkdirAll(p string) error {
+	f := func() (interface{}, error) {
+		parent, err := g.remoteMkdirAll(p)
+		return &tuple{first: parent, second: false, last: err}, err
+	}
+
+	retrier := retryableChangeOp(f)
+	_, err := expb.ExponentialBackOffSync(retrier)
+
+	return err
+}
+
 func (g *Commands) playPushChanges(cl []*Change, opMap *map[Operation]sizeCounter) (err error) {
 
 	if opMap == nil {
@@ -264,33 +282,51 @@ func (g *Commands) playPushChanges(cl []*Change, opMap *map[Operation]sizeCounte
 	}
 
 	// Schedule them
-	g.mapOnTrie(addTrie, g.remoteAdd)
-	g.mapOnTrie(modTrie, g.remoteMod)
-	g.mapOnTrie(delTrie, g.remoteDelete)
+	g.mapOnTrie(addTrie, g.remoteAdd, g.remoteLevelMkdirAll)
+	g.mapOnTrie(modTrie, g.remoteMod, g.remoteLevelMkdirAll)
+	g.mapOnTrie(delTrie, g.remoteDelete, g.remoteLevelNoop)
 
 	g.taskFinish()
 	return err
 }
 
-func (g *Commands) mapOnTrie(t *trie.Trie, f func(*Change) error) {
+func (g *Commands) mapOnTrie(t *trie.Trie, f func(*Change) error, levelF func(string) error) {
 	// Firstly operate on directories
 	t.Tag(trie.PotentialDir, "dir")
 
-	pDirs := make(chan interface{})
-	go func() {
-		defer close(pDirs)
-		dirs := t.Match(trie.PotentialDir)
-		for dir := range dirs {
-			if !dir.Eos {
-				continue
-			}
-			pDirs <- dir.Data
+	levelApply := func(level []interface{}) {
+		if len(level) < 2 {
+			return
 		}
-	}()
+		casts := func() []string {
+			strl := []string{}
+			for _, lvl := range level {
+				clCh, ok := lvl.(*Change)
+				if !ok || clCh == nil {
+					continue
+				}
+				strl = append(strl, clCh.Path)
+			}
+			return strl
+		}()
 
-	g.mapChanges(pDirs, f)
+		if len(casts) < 2 {
+			return
+		}
 
-	walk := t.BreadthFirstWalk()
+		mainRoot := commonPrefixSplit("/", casts...)
+		// g.log.Logf("levels %v %v\n", mainRoot, casts)
+
+		if rootLike(mainRoot) || len(mainRoot) < 1 {
+			return
+		}
+		lErr := levelF(mainRoot)
+		if lErr != nil {
+			g.log.Logf("push: levellErr: %v\n", lErr)
+		}
+	}
+
+	walk := t.BreadthFirstWalk(levelApply)
 	g.mapChanges(walk, f)
 }
 

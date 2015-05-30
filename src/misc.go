@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	filePath "path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -36,12 +37,9 @@ const (
 )
 
 var (
-	MaxFailedRetryCount       = uint32(20)              // Arbitrary value
-	ThrottledRequestsDuration = time.Duration(1e9 / 10) // Arbitrary value
-)
-
-var (
-	DefaultMaxProcs = 10
+	DefaultMaxProcs           = 4
+	MaxFailedRetryCount       = uint32(20)                           // Arbitrary value
+	ThrottledRequestsDuration = time.Duration(1e9 / DefaultMaxProcs) // Arbitrary value
 )
 
 var BytesPerKB = float64(1024)
@@ -327,6 +325,47 @@ func commonPrefix(values ...string) string {
 		prefix[i] = min[i]
 	}
 	return string(prefix)
+}
+
+func commonPrefixSplit(splitter string, values ...string) string {
+	if len(values) < 1 {
+		return ""
+	}
+
+	splits := [][]string{}
+	spl := strings.Split(values[0], splitter)
+	minLen := len(spl)
+
+	for _, it := range values {
+		spl := strings.Split(it, splitter)
+		curLen := len(spl)
+		if curLen < minLen {
+			minLen = curLen
+		}
+		splits = append(splits, spl)
+	}
+
+	joined := []string{splitter}
+	done := false
+
+	for i := 0; i < minLen; i += 1 {
+		head := splits[0][i]
+
+		for _, indv := range splits {
+			if indv[i] != head {
+				done = true
+				break
+			}
+		}
+
+		if done {
+			break
+		}
+
+		joined = append(joined, head)
+	}
+
+	return filePath.Clean(sepJoinNonEmpty(splitter, joined...))
 }
 
 func readCommentedFile(p, comment string) (clauses []string, err error) {
