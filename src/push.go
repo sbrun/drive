@@ -24,13 +24,13 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/odeke-em/drive/config"
 	"github.com/odeke-em/dts/trie"
 
 	expb "github.com/odeke-em/exponential-backoff"
+	rationer "github.com/odeke-em/rationer"
 )
 
 // Pushes to remote if local path exists and in a gd context. If path is a
@@ -328,59 +328,34 @@ func (g *Commands) mapOnTrie(t *trie.Trie, f func(*Change) error, levelF func(st
 	g.mapChanges(walk, f)
 }
 
-func (g *Commands) mapChanges(srcChan chan interface{}, f func(*Change) error) {
-	spinning := true
-	throttle := time.Tick(ThrottledRequestsDuration)
-	perRequestThrottle := time.Tick(ThrottledRequestsDuration / 2)
-
-	var i, doneCount, nMax int
-	nMax = maxProcs()
-
-	for spinning {
-		var wg sync.WaitGroup
-
-		i = 0
-		doneCount = 0
-
-		wg.Add(nMax)
-
-		for i < nMax {
-			i += 1
-			item, hasContent := <-srcChan
-			if !hasContent {
-				spinning = false
-				break
-			}
-
-			ch, ok := item.(*Change)
-			if !ok {
-				g.log.LogErrf("cast %v to \"Change\" failed\n", item)
-				continue
-			}
-
-			doneCount += 1
-			go func(cch *Change, wgg *sync.WaitGroup) {
-				defer wgg.Done()
-				err := f(cch)
-				if err != nil {
-					g.log.LogErrf("%s: %v\n", cch.Path, err)
-				}
-				<-perRequestThrottle
-			}(ch, &wg)
-			<-perRequestThrottle
-		}
-
-		for {
-			if doneCount >= nMax {
-				break
-			}
-			doneCount += 1
-			wg.Done()
-		}
-
-		wg.Wait()
-		<-throttle
+func changeJobber(fn func(*Change) error, ch *Change) rationer.Job {
+	return func() interface{} {
+		return fn(ch)
 	}
+}
+
+func (g *Commands) mapChanges(srcChan chan interface{}, f func(*Change) error) {
+	ration := rationer.NewRationer(10)
+	loader := ration.Run()
+
+	for srcCh := range srcChan {
+		change, ok := srcCh.(*Change)
+
+		fmt.Println("ok", ok)
+		if !ok {
+			continue
+		}
+
+		loader <- changeJobber(f, change)
+	}
+
+	go func(res chan interface{}) {
+		for _ = range res { // Drain it
+		}
+	}(ration.Results())
+
+	loader <- rationer.Sentinel
+	ration.Wait()
 }
 
 func lonePush(g *Commands, parent, absPath, path string) (cl []*Change, err error) {
