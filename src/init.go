@@ -16,11 +16,11 @@ package drive
 
 import (
 	"os"
+
+	"golang.org/x/net/context"
 )
 
-func (g *Commands) Init() (err error) {
-	var refresh string
-
+func (g *Commands) Init() error {
 	g.context.ClientId = os.Getenv("GOOGLE_API_CLIENT_ID")
 	g.context.ClientSecret = os.Getenv("GOOGLE_API_CLIENT_SECRET")
 	if g.context.ClientId == "" || g.context.ClientSecret == "" {
@@ -28,10 +28,12 @@ func (g *Commands) Init() (err error) {
 		g.context.ClientSecret = "RHjKdah8RrHFwu6fcc0uEVCw"
 	}
 
-	if refresh, err = RetrieveRefreshToken(g.context); err != nil {
-		return
+	ctx := context.Background()
+	refreshToken, err := RetrieveRefreshToken(ctx, g.context)
+	if err != nil {
+		return err
 	}
-	g.context.RefreshToken = refresh
-	err = g.context.Write()
-	return
+
+	g.context.RefreshToken = refreshToken
+	return g.context.Write()
 }

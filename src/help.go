@@ -45,65 +45,88 @@ const (
 	UntrashKey    = "untrash"
 	UnpubKey      = "unpub"
 	VersionKey    = "version"
+	Md5sumKey     = "md5sum"
 
-	CoercedMimeKeyKey = "coerced-mime"
-	ForceKey          = "force"
-	QuietKey          = "quiet"
-	QuitShortKey      = "q"
-	YesShortKey       = "Y"
-	QuitLongKey       = "quit"
-	MatchesKey        = "matches"
-	HiddenKey         = "hidden"
-	NoPromptKey       = "no-prompt"
-	TrashedKey        = "trashed"
-	DriveRepoRelPath  = "github.com/odeke-em/drive"
+	CoercedMimeKeyKey     = "coerced-mime"
+	DepthKey              = "depth"
+	EmailsKey             = "emails"
+	EmailMessageKey       = "emailMessage"
+	ForceKey              = "force"
+	QuietKey              = "quiet"
+	QuitShortKey          = "q"
+	YesShortKey           = "Y"
+	QuitLongKey           = "quit"
+	MatchesKey            = "matches"
+	HiddenKey             = "hidden"
+	Md5Key                = "md5"
+	NoPromptKey           = "no-prompt"
+	SizeKey               = "size"
+	NameKey               = "name"
+	OriginalNameKey       = "oname"
+	ModTimeKey            = "modt"
+	LastViewedByMeTimeKey = "lvt"
+	RoleKey               = "role"
+	TypeKey               = "type"
+	TrashedKey            = "trashed"
+	SortKey               = "sort"
+	DriveRepoRelPath      = "github.com/odeke-em/drive"
 )
 
 const (
-	DescAbout          = "print out information about your Google drive"
-	DescAll            = "print out the entire help section"
-	DescCopy           = "copy remote paths to a destination"
-	DescDelete         = "deletes the items permanently. This operation is irreversible"
-	DescDiff           = "compares local files with their remote equivalent"
-	DescEmptyTrash     = "permanently cleans out your trash"
-	DescExcludeOps     = "exclude operations"
-	DescFeatures       = "returns information about the features of your drive"
-	DescHelp           = "Get help for a topic"
-	DescInit           = "initializes a directory and authenticates user"
-	DescList           = "lists the contents of remote path"
-	DescMove           = "move files/folders"
-	DescQuota          = "prints out information related to your quota space"
-	DescPublish        = "publishes a file and prints its publicly available url"
-	DescRename         = "renames a file/folder"
-	DescPull           = "pulls remote changes from Google Drive"
-	DescPush           = "push local changes to Google Drive"
-	DescShare          = "share files with specific emails giving the specified users specifies roles and permissions"
-	DescStat           = "display information about a file"
-	DescTouch          = "updates a remote file's modification time to that currently on the server"
-	DescTrash          = "moves files to trash"
-	DescUnshare        = "revoke a user's access to a file"
-	DescUntrash        = "restores files from trash to their original locations"
-	DescUnpublish      = "revokes public access to a file"
-	DescVersion        = "prints the version"
-	DescAccountTypes   = "\n\t* anyone.\n\t* user.\n\t* domain.\n\t* group"
-	DescRoles          = "\n\t* owner.\n\t* reader.\n\t* writer.\n\t* commenter."
-	DescIgnoreChecksum = "avoids computation of checksums as a final check." +
+	DescAbout                 = "print out information about your Google drive"
+	DescAll                   = "print out the entire help section"
+	DescCopy                  = "copy remote paths to a destination"
+	DescDelete                = "deletes the items permanently. This operation is irreversible"
+	DescDiff                  = "compares local files with their remote equivalent"
+	DescEmptyTrash            = "permanently cleans out your trash"
+	DescExcludeOps            = "exclude operations"
+	DescFeatures              = "returns information about the features of your drive"
+	DescHelp                  = "Get help for a topic"
+	DescInit                  = "initializes a directory and authenticates user"
+	DescList                  = "lists the contents of remote path"
+	DescMove                  = "move files/folders"
+	DescQuota                 = "prints out information related to your quota space"
+	DescPublish               = "publishes a file and prints its publicly available url"
+	DescRename                = "renames a file/folder"
+	DescPull                  = "pulls remote changes from Google Drive"
+	DescPush                  = "push local changes to Google Drive"
+	DescShare                 = "share files with specific emails giving the specified users specifies roles and permissions"
+	DescStat                  = "display information about a file"
+	DescTouch                 = "updates a remote file's modification time to that currently on the server"
+	DescTrash                 = "moves files to trash"
+	DescUnshare               = "revoke a user's access to a file"
+	DescUntrash               = "restores files from trash to their original locations"
+	DescUnpublish             = "revokes public access to a file"
+	DescVersion               = "prints the version"
+	DescMd5sum                = "prints a list compatible with md5sum(1)"
+	DescAccountTypes          = "\n\t* anyone.\n\t* user.\n\t* domain.\n\t* group"
+	DescRoles                 = "\n\t* owner.\n\t* reader.\n\t* writer.\n\t* commenter."
+	DescExplicitylPullExports = "explicitly pull exports"
+	DescIgnoreChecksum        = "avoids computation of checksums as a final check." +
 		"\nUse cases may include:\n\t* when you are low on bandwidth e.g SSHFS." +
 		"\n\t* Are on a low power device"
 	DescIgnoreConflict    = "turns off the conflict resolution safety"
 	DescIgnoreNameClashes = "ignore name clashes"
+	DescSort              = "sort items in the order\n\t* md5.\n\t* name.\n\t* size.\n\t* type.\n\t* version"
 )
 
 const (
+	CLIOptionExplicitlyExport  = "explicitly-export"
 	CLIOptionIgnoreChecksum    = "ignore-checksum"
 	CLIOptionIgnoreConflict    = "ignore-conflict"
 	CLIOptionIgnoreNameClashes = "ignore-name-clashes"
 	CLIOptionExcludeOperations = "exclude-ops"
 	CLIOptionId                = "id"
+	CLIOptionNoClobber         = "no-clobber"
+	CLIOptionNotify            = "notify"
 )
 
 const (
 	DesktopExtension = "desktop"
+)
+
+const (
+	InfiniteDepth = -1
 )
 
 var skipChecksumNote = fmt.Sprintf(
@@ -206,6 +229,17 @@ var Aliases = map[string][]string{
 func ShowAllDescriptions() {
 	for key, _ := range docMap {
 		ShowDescription(key)
+		fmt.Println()
+	}
+}
+
+func ShowDescriptions(topics ...string) {
+	if len(topics) < 1 {
+		topics = append(topics, AllKey)
+	}
+
+	for _, topic := range topics {
+		ShowDescription(topic)
 		fmt.Println()
 	}
 }

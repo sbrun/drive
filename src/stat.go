@@ -16,11 +16,10 @@ package drive
 
 import (
 	"fmt"
-	"sync"
-	"time"
-
 	drive "github.com/odeke-em/google-api-go-client/drive/v2"
 	"github.com/odeke-em/log"
+	"path/filepath"
+	"strings"
 )
 
 type keyValue struct {
@@ -29,70 +28,40 @@ type keyValue struct {
 }
 
 func (g *Commands) StatById() error {
-	for _, srcId := range g.opts.Sources {
-		f, err := g.rem.FindById(srcId)
-		if err != nil {
-			g.log.LogErrf("statById: %s err: %v\n", srcId, err)
-			continue
-		}
-
-		fch := g.stat(srcId, f)
-		for _ = range fch {
-		}
-	}
-
-	return nil
+	return g.statfn("statById", g.rem.FindById)
 }
 
 func (g *Commands) Stat() error {
-	channelMap := make(map[int]chan *keyValue)
-	var wg sync.WaitGroup
-	wg.Add(len(g.opts.Sources))
-	for i, relToRootPath := range g.opts.Sources {
-		go func(id int, p string, chanMap *map[int]chan *keyValue, wgg *sync.WaitGroup) {
-			defer wgg.Done()
-			chMap := *chanMap
+	return g.statfn("stat", g.rem.FindByPath)
+}
 
-			file, err := g.rem.FindByPath(p)
-			if err == nil {
-				chMap[id] = g.stat(p, file)
-				return
-			}
-
-			g.log.LogErrf("%s: %v\n", p, err)
-			childChan := make(chan *keyValue)
-			close(childChan)
-			chMap[id] = childChan
-			return
-		}(i, relToRootPath, &channelMap, &wg)
-	}
-	wg.Wait()
-
-	throttle := time.Tick(1e9 / 10)
-	// Spin until all the channels are drained
-	for {
-		if len(channelMap) < 1 {
-			break
+func (g *Commands) statfn(fname string, fn func(string) (*File, error)) error {
+	for _, src := range g.opts.Sources {
+		f, err := fn(src)
+		if err != nil {
+			g.log.LogErrf("%s: %s err: %v\n", fname, src, err)
+			continue
 		}
 
-		for key, childChan := range channelMap {
-			select {
-			case v := <-childChan:
-				if v == nil { // Closed
-					delete(channelMap, key)
-				} else if v.value != nil {
-					err := v.value.(error)
-					if err != nil {
-						g.log.LogErrf("v: %s err: %v\n", v.key, err)
-					}
-				}
-			default:
+		if g.opts.Md5sum {
+
+			src = f.Name // forces filename if -id is used
+
+			// md5sum with no arguments should do md5sum *
+			if f.IsDir && rootLike(g.opts.Path) {
+				src = ""
 			}
+
 		}
 
-		// Pause for a bit
-		<-throttle
+		err = g.stat(src, f, g.opts.Depth)
+
+		if err != nil {
+			g.log.LogErrf("%s: %s err: %v\n", fname, src, err)
+			continue
+		}
 	}
+
 	return nil
 }
 
@@ -157,65 +126,45 @@ func prettyFileStat(logf log.Loggerf, relToRootPath string, file *File) {
 	}
 }
 
-func (g *Commands) stat(relToRootPath string, file *File) chan *keyValue {
-	statChan := make(chan *keyValue)
+func (g *Commands) stat(relToRootPath string, file *File, depth int) error {
 
-	// Arbitrary value for throttle pause duration
-	throttle := time.Tick(1e9 / 5)
-	go func() {
-		kv := &keyValue{
-			key: relToRootPath,
+	if g.opts.Md5sum {
+		if file.Md5Checksum != "" {
+			g.log.Logf("%32s  %s\n", file.Md5Checksum, strings.TrimPrefix(relToRootPath, "/"))
 		}
-
-		defer func() {
-			statChan <- kv
-			statChan <- nil
-			close(statChan)
-		}()
-
+	} else {
 		prettyFileStat(g.log.Logf, relToRootPath, file)
 		perms, permErr := g.rem.listPermissions(file.Id)
 		if permErr != nil {
-			kv.value = permErr
-			return
+			return permErr
 		}
 
 		for _, perm := range perms {
 			prettyPermission(g.log.Logf, perm)
 		}
-		if !file.IsDir || !g.opts.Recursive {
-			return
-		}
+	}
 
-		remoteChildren := g.rem.FindByParentId(file.Id, g.opts.Hidden)
-		channelMap := make(map[int]chan *keyValue)
-		i := 0
-		for child := range remoteChildren {
-			childChan := g.stat(relToRootPath+"/"+child.Name, child)
-			<-throttle
-			channelMap[i] = childChan
-			i += 1
-		}
+	if depth == 0 || !file.IsDir {
+		return nil
+	}
 
-		for {
-			if len(channelMap) < 1 {
-				break
-			}
+	if depth >= 1 {
+		depth -= 1
+	}
 
-			for key, childChan := range channelMap {
-				select {
-				case v := <-childChan:
-					if v == nil { // Closed
-						delete(channelMap, key)
-					} else {
-						statChan <- v
-					}
-				default:
-					<-throttle
-				}
-			}
-			<-throttle
-		}
-	}()
-	return statChan
+	var remoteChildren []*File
+
+	for child := range g.rem.FindByParentId(file.Id, g.opts.Hidden) {
+		remoteChildren = append(remoteChildren, child)
+	}
+
+	if g.opts.Md5sum {
+		g.sort(remoteChildren, Md5Key, NameKey)
+	}
+
+	for _, child := range remoteChildren {
+		g.stat(filepath.Clean(relToRootPath+"/"+child.Name), child, depth)
+	}
+
+	return nil
 }

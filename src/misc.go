@@ -161,7 +161,12 @@ func memoizeBytes() byteDescription {
 	suffixes := []string{"B", "KB", "MB", "GB", "TB", "PB"}
 	maxLen := len(suffixes) - 1
 
+	var cacheMu sync.Mutex
+
 	return func(b int64) string {
+		cacheMu.Lock()
+		defer cacheMu.Unlock()
+
 		description, ok := cache[b]
 		if ok {
 			return description
@@ -483,12 +488,12 @@ var regExtMap = func() map[*regexp.Regexp]string {
 }()
 
 func _mimeTyper() func(string) string {
-	cache := map[string]string{}
-	var mu sync.Mutex
+	var cache = make(map[string]string)
+	var cacheMu sync.Mutex
 
 	return func(ext string) string {
-		mu.Lock()
-		defer mu.Unlock()
+		cacheMu.Lock()
+		defer cacheMu.Unlock()
 
 		memoized, ok := cache[ext]
 		if ok {
@@ -544,4 +549,25 @@ func CrudAtoi(ops ...string) CrudValue {
 	}
 
 	return opValue
+}
+
+func httpOk(statusCode int) bool {
+	return statusCode >= 200 && statusCode <= 299
+}
+
+func hasAnyPrefix(value string, prefixes ...string) bool {
+	return _hasAnyAtExtreme(value, strings.HasPrefix, prefixes)
+}
+
+func hasAnySuffix(value string, prefixes ...string) bool {
+	return _hasAnyAtExtreme(value, strings.HasSuffix, prefixes)
+}
+
+func _hasAnyAtExtreme(value string, fn func(string, string) bool, queries []string) bool {
+	for _, query := range queries {
+		if fn(value, query) {
+			return true
+		}
+	}
+	return false
 }

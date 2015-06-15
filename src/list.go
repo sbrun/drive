@@ -45,6 +45,20 @@ type traversalSt struct {
 	mask             int
 	inTrash          bool
 	explicitNoPrompt bool
+	sorters          []string
+}
+
+func sorters(opts *Options) (sortKeys []string) {
+	if opts == nil || opts.Meta == nil {
+		return
+	}
+
+	meta := *(opts.Meta)
+	retr, ok := meta[SortKey]
+	if !ok {
+		return
+	}
+	return retr
 }
 
 func (g *Commands) ListMatches() error {
@@ -69,6 +83,7 @@ func (g *Commands) ListMatches() error {
 			headPath: g.opts.Path,
 			inTrash:  g.opts.InTrash,
 			mask:     g.opts.TypeMask,
+			sorters:  sorters(g.opts),
 		}
 
 		traversalCount += 1
@@ -141,6 +156,7 @@ func (g *Commands) List(byId bool) error {
 			headPath: kv.key,
 			inTrash:  g.opts.InTrash,
 			mask:     g.opts.TypeMask,
+			sorters:  sorters(g.opts),
 		}
 
 		if !g.breadthFirst(travSt, spin) {
@@ -293,19 +309,30 @@ func (g *Commands) breadthFirst(travSt traversalSt, spin *playable) bool {
 
 	spin.play()
 
-	var children []*File
 	onlyFiles := (g.opts.TypeMask & NonFolder) != 0
 
 	iterCount := uint64(0)
+
+	var collector []*File
 
 	for file := range fileChan {
 		if file == nil {
 			return false
 		}
+
 		if isHidden(file.Name, g.opts.Hidden) {
 			continue
 		}
 
+		collector = append(collector, file)
+	}
+
+	if len(travSt.sorters) >= 1 {
+		collector = g.sort(collector, travSt.sorters...)
+	}
+
+	var children []*File
+	for _, file := range collector {
 		if file.IsDir {
 			children = append(children, file)
 		}
@@ -330,6 +357,7 @@ func (g *Commands) breadthFirst(travSt traversalSt, spin *playable) bool {
 				inTrash:          travSt.inTrash,
 				mask:             g.opts.TypeMask,
 				explicitNoPrompt: travSt.explicitNoPrompt,
+				sorters:          travSt.sorters,
 			}
 
 			if !g.breadthFirst(childSt, spin) {

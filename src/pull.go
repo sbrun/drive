@@ -231,10 +231,8 @@ func (g *Commands) playPullChanges(cl []*Change, exports []string, opMap *map[Op
 	defer close(g.rem.progressChan)
 
 	// TODO: Only provide precedence ordering if all the other options are allowed
-	// Currently noop on sorting by precedence
-	if false && !g.opts.NoClobber {
-		sort.Sort(ByPrecedence(cl))
-	}
+
+	sort.Sort(ByPrecedence(cl))
 
 	go func() {
 		for n := range g.rem.progressChan {
@@ -253,8 +251,10 @@ func (g *Commands) playPullChanges(cl []*Change, exports []string, opMap *map[Op
 		}
 		var wg sync.WaitGroup
 		wg.Add(len(next))
+
 		// play the changes
 		// TODO: add timeouts
+
 		for _, c := range next {
 			switch c.Op() {
 			case OpMod:
@@ -267,7 +267,9 @@ func (g *Commands) playPullChanges(cl []*Change, exports []string, opMap *map[Op
 				go g.localDelete(&wg, c)
 			}
 		}
+
 		wg.Wait()
+
 	}
 
 	g.taskFinish()
@@ -319,14 +321,14 @@ func (g *Commands) localMod(wg *sync.WaitGroup, change *Change, exports []string
 
 func (g *Commands) localAdd(wg *sync.WaitGroup, change *Change, exports []string) (err error) {
 	defer func() {
-		if err == nil {
-			src := change.Src
-			index := src.ToIndex()
-			sErr := g.context.SerializeIndex(index, g.context.AbsPathOf(""))
+		if err == nil && change.Src != nil {
+			fileToSerialize := change.Src
+			index := fileToSerialize.ToIndex()
+			indexErr := g.context.SerializeIndex(index, g.context.AbsPathOf(""))
 
 			// TODO: Should indexing errors be reported?
-			if sErr != nil {
-				g.log.LogErrf("serializeIndex %s: %v\n", src.Name, sErr)
+			if indexErr != nil {
+				g.log.LogErrf("serializeIndex %s: %v\n", fileToSerialize.Name, indexErr)
 			}
 		}
 		wg.Done()
