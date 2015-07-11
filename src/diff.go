@@ -35,7 +35,9 @@ func (g *Commands) Diff() (err error) {
 
 	for _, relToRootPath := range g.opts.Sources {
 		fsPath := g.context.AbsPathOf(relToRootPath)
-		ccl, cErr := g.changeListResolve(relToRootPath, fsPath, true)
+		ccl, _, cErr := g.changeListResolve(relToRootPath, fsPath, true)
+		// TODO: Show the conflicts if any
+
 		if cErr != nil {
 			return cErr
 		}

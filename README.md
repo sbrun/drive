@@ -15,6 +15,7 @@
 - [Configuration](#configuration)
 - [Usage](#usage)
   - [Initializing](#initializing)
+  - [De Initializing](#de-initializing)
   - [Pulling](#pulling)
     - [Exporting Docs](#exporting-docs)
   - [Pushing](#pushing)
@@ -29,6 +30,7 @@
   - [Listing Files](#listing-files)
   - [Stating Files](#stating-files)
   - [Retrieving md5 checksums](#retrieving-md5-checksums)
+  - [New File](#new-file)
   - [Quota](#quota)
   - [Features](#features)
   - [About](#about)
@@ -38,6 +40,7 @@
   - [DriveIgnore](#driveignore)
   - [DesktopEntry](#desktopentry)
   - [Command Aliases](#command-aliases)
+  - [Index Prune](#index-prune)
 - [Revoking Account Access](#revoking-account-access)
 - [Uninstalling](#uninstalling)
 - [Applying patches](#applying-patches)
@@ -49,7 +52,7 @@
 
 ## Requirements
 
-go 1.2 or higher is required. See [here](https://golang.org/doc/install) for installation instructions and platform installers.
+go 1.3.X or higher is required. See [here](https://golang.org/doc/install) for installation instructions and platform installers.
 
 * Make sure to set your GOPATH in your env, .bashrc or .bash\_profile file. If you have not yet set it, you can do so like this:
 
@@ -77,6 +80,23 @@ Otherwise:
 ```shell
 $ go get github.com/odeke-em/drive/drive-gen && drive-gen
 ```
+
+In case you need a specific binary e.g for Debian folks [issue #271](https://github.com/odeke-em/drive/issues/271) and [issue 277](https://github.com/odeke-em/drive/issues/277)
+
+```shell
+$ go get -u github.com/odeke-em/drive/drive-google
+```
+
+That should produce a binary `drive-google`
+
+OR
+
+To bundle debug information with the binary, you can run:
+
+```shell
+$ go get -u github.com/odeke-em/drive/drive/drive-gen && drive-gen drive-google
+```
+
 
 ### Godep
 
@@ -113,6 +133,17 @@ Before you can use `drive`, you need to mount your Google Drive directory on you
 $ drive init ~/gdrive
 $ cd ~/gdrive
 ```
+
+### De Initializing
+
+The opposite of `drive init`, it will remove your credentials locally as well as configuration associated files.
+
+```shell
+$ drive deinit [--no-prompt]
+```
+
+For a complete de-initializing don't forget to revoke account access, [please see revoking account access](#revoking-account-access)
+
 
 ### Pulling
 
@@ -258,6 +289,14 @@ $ drive push -no-clobber
 $ drive push -force sure_of_content
 ```
 
+To pull without user input (i.e. without prompt)
+```shell
+$ drive push -quiet
+```
+or
+```shell
+$ drive push -no-prompt
+```
 
 To get Google Drive to convert a file to its native Google Docs format
 
@@ -487,6 +526,14 @@ e.g to first sort by modTime, then largest-to-smallest and finally most number o
 $ drive list --sort modtime,size_r,version_r Photos
 ```
 
+* For advanced listing
+
+```shell
+$ drive list --skip-mime mp4,doc,txt
+$ drive list --match-mime xls,docx
+$ drive list --exact-title url_test,Photos
+```
+
 ### Stating Files
 
 The `stat` commands show detailed file information for example people with whom it is shared, their roles and accountTypes, and
@@ -543,6 +590,19 @@ Compare across two different Drive accounts, including subfolders
 ```
 
 _Note: Running the 'drive md5sum' command retrieves pre-computed md5 sums from Drive; its speed is proportional to the number of files on Drive. Running the shell 'md5sum' command on local files requires reading through the files; its speed is proportional to the size of the files._
+
+
+### New File
+
+drive allows you to create an empty file or folder remotely
+Sample usage:
+
+```shell
+$ drive new --folder flux
+$ drive new --mime-key doc bofx
+$ drive new --mime-key folder content
+$ drive new flux.txt oxen.pdf # Allow auto type resolution from the extension
+```
 
 ### Quota
 
@@ -673,6 +733,40 @@ desire the ability to have \*.desktop files that enable the file to be opened ap
 + cp : copy
 + ls : list 
 + mv : move
+
+
+## Index Prune
+
+* index 
+
+If you would like to fetch missing index files for files that would otherwise not need any modifications, run:
+
+```shell
+$ drive index path1 path2 path3/path3.1 # To fetch any missing indices in those paths
+$ drive index --id 0CLu4lbUI9RTRM80k8EMoe5JQY2z
+```
+
+You can also fetch specific files by prefix matches
+```shell
+$ drive index --matches mp3 jpg
+```
+
+* prune
+
+In case you might have deleted files remotely but never using drive, and feel like you have stale indices,
+running `drive index --prune` will search your entire indices dir for index files that do not exist remotely and remove those ones
+
+```shell
+$ drive index --prune
+```
+
+* prune-and-index
+To combine both operations (prune and then fetch) for indices:
+
+```shell
+$ drive index --all-ops
+```
+
 
 ### Revoking Account Access
 

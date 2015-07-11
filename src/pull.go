@@ -24,6 +24,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/odeke-em/drive/config"
 	"github.com/odeke-em/statos"
 )
 
@@ -47,21 +48,17 @@ type downloadArg struct {
 // Pull from remote if remote path exists and in a god context. If path is a
 // directory, it recursively pulls from the remote if there are remote changes.
 // It doesn't check if there are remote changes if isForce is set.
-func (g *Commands) Pull(byId bool) (err error) {
-	var cl []*Change
+func (g *Commands) Pull(byId bool) error {
+	cl, clashes, err := pullLikeResolve(g, byId)
 
-	g.log.Logln("Resolving...")
-
-	spin := g.playabler()
-	spin.play()
-
-	resolver := g.pullByPath
-	if byId {
-		resolver = g.pullById
+	if len(clashes) >= 1 {
+		warnClashesPersist(g.log, clashes)
+		return ErrClashesDetected
 	}
 
-	cl, err = resolver()
-	spin.stop()
+	if err != nil {
+		return err
+	}
 
 	nonConflictsPtr, conflictsPtr := g.resolveConflicts(cl, false)
 	if conflictsPtr != nil {
@@ -71,25 +68,58 @@ func (g *Commands) Pull(byId bool) (err error) {
 
 	nonConflicts := *nonConflictsPtr
 
-	ok, opMap := printChangeList(g.log, nonConflicts, !g.opts.canPrompt(), g.opts.NoClobber)
+	clArg := changeListArg{
+		logy:      g.log,
+		changes:   nonConflicts,
+		noPrompt:  !g.opts.canPrompt(),
+		noClobber: g.opts.NoClobber,
+	}
+
+	ok, opMap := printChangeList(&clArg)
 	if !ok {
-		return
+		return nil
 	}
 
 	return g.playPullChanges(nonConflicts, g.opts.Exports, opMap)
 }
 
-func (g *Commands) PullMatches() (err error) {
-	var cl []*Change
-	matches, err := g.rem.FindMatches(g.opts.Path, g.opts.Sources, false)
+func pullLikeResolve(g *Commands, byId bool) (cl, clashes []*Change, err error) {
+	g.log.Logln("Resolving...")
+
+	spin := g.playabler()
+	spin.play()
+	defer spin.stop()
+
+	resolver := g.pullByPath
+	if byId {
+		resolver = g.pullById
+	}
+
+	return resolver()
+}
+
+func pullLikeMatchesResolver(g *Commands) (cl, clashes []*Change, err error) {
+	mq := matchQuery{
+		dirPath: g.opts.Path,
+		inTrash: false,
+		titleSearches: []fuzzyStringsValuePair{
+			{fuzzyLevel: Like, values: g.opts.Sources},
+		},
+	}
+	matches, err := g.rem.FindMatches(&mq) // g.opts.Path, g.opts.Sources, false)
 
 	if err != nil {
-		return err
+		return
 	}
 
 	p := g.opts.Path
 	if p == "/" {
 		p = ""
+	}
+
+	combiner := func(from []*Change, to *[]*Change, done chan bool) {
+		*to = append(*to, from...)
+		done <- true
 	}
 
 	for match := range matches {
@@ -99,12 +129,33 @@ func (g *Commands) PullMatches() (err error) {
 		relToRoot := "/" + match.Name
 		fsPath := g.context.AbsPathOf(relToRoot)
 
-		ccl, cErr := g.byRemoteResolve(relToRoot, fsPath, match, false)
+		ccl, cclashes, cErr := g.byRemoteResolve(relToRoot, fsPath, match, false)
 		if cErr != nil {
-			return cErr
+			err = cErr
+			return
 		}
 
-		cl = append(cl, ccl...)
+		done := make(chan bool, 2)
+		go combiner(ccl, &cl, done)
+		go combiner(cclashes, &clashes, done)
+
+		<-done
+		<-done
+	}
+
+	return
+}
+
+func (g *Commands) PullMatches() (err error) {
+	cl, clashes, err := pullLikeMatchesResolver(g)
+
+	if len(clashes) >= 1 {
+		warnClashesPersist(g.log, clashes)
+		return ErrClashesDetected
+	}
+
+	if err != nil {
+		return err
 	}
 
 	if len(cl) < 1 {
@@ -119,7 +170,14 @@ func (g *Commands) PullMatches() (err error) {
 
 	nonConflicts := *nonConflictsPtr
 
-	ok, opMap := printChangeList(g.log, nonConflicts, !g.opts.canPrompt(), g.opts.NoClobber)
+	clArg := changeListArg{
+		logy:      g.log,
+		changes:   nonConflicts,
+		noPrompt:  !g.opts.canPrompt(),
+		noClobber: g.opts.NoClobber,
+	}
+
+	ok, opMap := printChangeList(&clArg)
 	if !ok {
 		return nil
 	}
@@ -150,11 +208,11 @@ func (g *Commands) PullPiped(byId bool) (err error) {
 	return nil
 }
 
-func (g *Commands) pullById() (cl []*Change, err error) {
+func (g *Commands) pullById() (cl, clashes []*Change, err error) {
 	for _, srcId := range g.opts.Sources {
 		rem, remErr := g.rem.FindById(srcId)
 		if remErr != nil {
-			return cl, fmt.Errorf("pullById: %s: %v", srcId, remErr)
+			return cl, clashes, fmt.Errorf("pullById: %s: %v", srcId, remErr)
 		}
 
 		if rem == nil {
@@ -166,32 +224,49 @@ func (g *Commands) pullById() (cl []*Change, err error) {
 		curAbsPath := g.context.AbsPathOf(relToRootPath)
 		local, resErr := g.resolveToLocalFile(rem.Name, curAbsPath)
 		if resErr != nil {
-			return cl, resErr
+			return cl, clashes, resErr
 		}
 
-		ccl, clErr := g.doChangeListRecv(relToRootPath, curAbsPath, local, rem, false)
+		ccl, cclashes, clErr := g.doChangeListRecv(relToRootPath, curAbsPath, local, rem, false)
 		if clErr != nil {
-			return cl, clErr
+			if clErr != ErrClashesDetected {
+				return cl, clashes, clErr
+			} else {
+				clashes = append(clashes, cclashes...)
+			}
 		}
 		cl = append(cl, ccl...)
 	}
 
-	return cl, nil
+	if len(clashes) >= 1 {
+		err = ErrClashesDetected
+	}
+
+	return cl, clashes, err
 }
 
-func (g *Commands) pullByPath() (cl []*Change, err error) {
+func (g *Commands) pullByPath() (cl, clashes []*Change, err error) {
 	for _, relToRootPath := range g.opts.Sources {
 		fsPath := g.context.AbsPathOf(relToRootPath)
-		ccl, cErr := g.changeListResolve(relToRootPath, fsPath, false)
+		ccl, cclashes, cErr := g.changeListResolve(relToRootPath, fsPath, false)
+		fmt.Println(ccl, cclashes, cErr, relToRootPath, fsPath)
 		if cErr != nil {
-			return cl, cErr
+			if cErr != ErrClashesDetected {
+				return cl, clashes, cErr
+			} else {
+				clashes = append(clashes, cclashes...)
+			}
 		}
 		if len(ccl) > 0 {
 			cl = append(cl, ccl...)
 		}
 	}
 
-	return cl, nil
+	if len(clashes) >= 1 {
+		err = ErrClashesDetected
+	}
+
+	return cl, clashes, err
 }
 
 func (g *Commands) pullAndDownload(relToRootPath string, fh io.Writer, rem *File, piped bool) (err error) {
@@ -265,6 +340,8 @@ func (g *Commands) playPullChanges(cl []*Change, exports []string, opMap *map[Op
 				go g.localAdd(&wg, c, exports)
 			case OpDelete:
 				go g.localDelete(&wg, c)
+			case OpIndexAddition:
+				go g.localAddIndex(&wg, c)
 			}
 		}
 
@@ -276,16 +353,29 @@ func (g *Commands) playPullChanges(cl []*Change, exports []string, opMap *map[Op
 	return err
 }
 
+func (g *Commands) localAddIndex(wg *sync.WaitGroup, change *Change) (err error) {
+	f := change.Src
+	defer func() {
+		if f != nil {
+			chunks := chunkInt64(change.Src.Size)
+			for n := range chunks {
+				g.rem.progressChan <- n
+			}
+		}
+		wg.Done()
+	}()
+
+	return g.createIndex(f)
+}
+
 func (g *Commands) localMod(wg *sync.WaitGroup, change *Change, exports []string) (err error) {
 	defer func() {
 		if err == nil {
 			src := change.Src
-			index := src.ToIndex()
-			wErr := g.context.SerializeIndex(index, g.context.AbsPathOf(""))
-
+			indexErr := g.createIndex(src)
 			// TODO: Should indexing errors be reported?
-			if wErr != nil {
-				g.log.LogErrf("serializeIndex %s: %v\n", src.Name, wErr)
+			if indexErr != nil {
+				g.log.LogErrf("localMod:createIndex %s: %v\n", src.Name, indexErr)
 			}
 		}
 		wg.Done()
@@ -323,12 +413,11 @@ func (g *Commands) localAdd(wg *sync.WaitGroup, change *Change, exports []string
 	defer func() {
 		if err == nil && change.Src != nil {
 			fileToSerialize := change.Src
-			index := fileToSerialize.ToIndex()
-			indexErr := g.context.SerializeIndex(index, g.context.AbsPathOf(""))
 
+			indexErr := g.createIndex(fileToSerialize)
 			// TODO: Should indexing errors be reported?
 			if indexErr != nil {
-				g.log.LogErrf("serializeIndex %s: %v\n", fileToSerialize.Name, indexErr)
+				g.log.LogErrf("localAdd:createIndex %s: %v\n", fileToSerialize.Name, indexErr)
 			}
 		}
 		wg.Done()
@@ -366,10 +455,23 @@ func (g *Commands) localDelete(wg *sync.WaitGroup, change *Change) (err error) {
 			for n := range chunks {
 				g.rem.progressChan <- n
 			}
+
+			dest := change.Dest
+			index := dest.ToIndex()
+			rmErr := g.context.RemoveIndex(index, g.context.AbsPathOf(""))
+			// For the sake of files missing remotely yet present locally and might not have a FileId
+			if rmErr != nil && rmErr != config.ErrEmptyFileIdForIndex {
+				g.log.LogErrf("localDelete removing index for: \"%s\" at \"%s\" %v\n", dest.Name, dest.BlobAt, rmErr)
+			}
 		}
 		wg.Done()
 	}()
+
 	err = os.RemoveAll(change.Dest.BlobAt)
+	if err != nil {
+		g.log.LogErrf("localDelete: \"%s\" %v\n", change.Dest.BlobAt, err)
+	}
+
 	return
 }
 

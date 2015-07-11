@@ -26,6 +26,8 @@ import (
 	"github.com/odeke-em/xon/pkger/src"
 )
 
+var AliasBinaryDir = "drive-google"
+
 func logErr(err error) {
 	fmt.Fprintf(os.Stderr, "%v\n", err)
 }
@@ -98,7 +100,18 @@ func main() {
 	goBinaryPath, lookUpErr := exec.LookPath("go")
 	exitIfError(lookUpErr)
 
-	driveMainPath := filepath.Join(drive.DriveRepoRelPath, "cmd", "drive")
+	argc := len(os.Args)
+
+	srcDirSegments := []string{"cmd", "drive"}
+
+	if argc >= 2 {
+		if os.Args[1] == AliasBinaryDir {
+			srcDirSegments = []string{AliasBinaryDir}
+		}
+	}
+
+	allCombined := append([]string{drive.DriveRepoRelPath}, srcDirSegments...)
+	driveMainPath := filepath.Join(allCombined...)
 	generateCmd := exec.Cmd{
 		Args:   []string{goBinaryPath, "get", driveMainPath},
 		Dir:    ".",

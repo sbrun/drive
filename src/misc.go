@@ -445,6 +445,7 @@ var regExtStrMap = map[string]string{
 	"csv":   "text/csv",
 	"html?": "text/html",
 	"te?xt": "text/plain",
+	"xml":   "text/xml",
 
 	"gif":   "image/gif",
 	"png":   "image/png",
@@ -468,26 +469,36 @@ var regExtStrMap = map[string]string{
 	"rtf": "application/rtf",
 	"pdf": "application/pdf",
 
-	"apk": "application/vnd.android.package-archive",
-	"bin": "application/octet-stream",
+	"json": "application/json",
+	"js":   "application/x-javascript",
+
+	"apk":   "application/vnd.android.package-archive",
+	"bin":   "application/octet-stream",
+	"tiff?": "image/tiff",
+	"tgz":   "application/x-compressed",
+	"zip":   "application/zip",
+
+	"mp3": "audio/mpeg",
 
 	"docx?": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 	"pptx?": "application/vnd.openxmlformats-officedocument.wordprocessingml.presentation",
 	"xlsx?": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 
-var regExtMap = func() map[*regexp.Regexp]string {
+func regMapper(srcMaps ...map[string]string) map[*regexp.Regexp]string {
 	regMap := make(map[*regexp.Regexp]string)
-	for regStr, mimeType := range regExtStrMap {
-		regExComp, err := regexp.Compile(regStr)
-		if err == nil {
-			regMap[regExComp] = mimeType
+	for _, srcMap := range srcMaps {
+		for regStr, resolve := range srcMap {
+			regExComp, err := regexp.Compile(regStr)
+			if err == nil {
+				regMap[regExComp] = resolve
+			}
 		}
 	}
 	return regMap
-}()
+}
 
-func _mimeTyper() func(string) string {
+func cacher(regMap map[*regexp.Regexp]string) func(string) string {
 	var cache = make(map[string]string)
 	var cacheMu sync.Mutex
 
@@ -501,7 +512,7 @@ func _mimeTyper() func(string) string {
 		}
 
 		bExt := []byte(ext)
-		for regEx, mimeType := range regExtMap {
+		for regEx, mimeType := range regMap {
 			if regEx != nil && regEx.Match(bExt) {
 				memoized = mimeType
 				break
@@ -521,7 +532,28 @@ func maxProcs() int {
 	return int(maxProcs)
 }
 
-var mimeTypeFromExt = _mimeTyper()
+func anyMatch(pat *regexp.Regexp, args ...string) bool {
+	if pat == nil {
+		return false
+	}
+
+	for _, arg := range args {
+		if pat.Match([]byte(arg)) {
+			return true
+		}
+	}
+	return false
+}
+
+var mimeTypeFromQuery = cacher(regMapper(regExtStrMap, map[string]string{
+	"folder": DriveFolderMimeType,
+	"mp4":    "video/mp4",
+	"docs":   "application/vnd.google-apps.document",
+	"sheet":  "application/vnd.google-apps.sheet",
+	"form":   "application/vnd.google-apps.form",
+}))
+
+var mimeTypeFromExt = cacher(regMapper(regExtStrMap))
 
 func guessMimeType(p string) string {
 	resolvedMimeType := mimeTypeFromExt(p)
@@ -570,4 +602,8 @@ func _hasAnyAtExtreme(value string, fn func(string, string) bool, queries []stri
 		}
 	}
 	return false
+}
+
+func customQuote(s string) string {
+	return "\"" + strings.Replace(strings.Replace(s, "\\", "\\\\", -1), "\"", "\\\"", -1) + "\""
 }

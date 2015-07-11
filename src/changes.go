@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/odeke-em/drive/config"
-	"github.com/odeke-em/dts/ascii-trie"
 	"github.com/odeke-em/log"
 )
 
@@ -115,17 +114,17 @@ func (g *Commands) resolveToLocalFile(relToRoot, fsPath string) (local *File, er
 	return
 }
 
-func (g *Commands) byRemoteResolve(relToRoot, fsPath string, r *File, isPush bool) (cl []*Change, err error) {
+func (g *Commands) byRemoteResolve(relToRoot, fsPath string, r *File, isPush bool) (cl, clashes []*Change, err error) {
 	var l *File
 	l, err = g.resolveToLocalFile(relToRoot, fsPath)
 	if err != nil {
-		return cl, err
+		return cl, clashes, err
 	}
 
 	return g.doChangeListRecv(relToRoot, fsPath, l, r, isPush)
 }
 
-func (g *Commands) changeListResolve(relToRoot, fsPath string, isPush bool) (cl []*Change, err error) {
+func (g *Commands) changeListResolve(relToRoot, fsPath string, isPush bool) (cl, clashes []*Change, err error) {
 	var r *File
 	r, err = g.rem.FindByPath(relToRoot)
 	if err != nil && err != ErrPathNotExists {
@@ -135,7 +134,7 @@ func (g *Commands) changeListResolve(relToRoot, fsPath string, isPush bool) (cl 
 	return g.byRemoteResolve(relToRoot, fsPath, r, isPush)
 }
 
-func (g *Commands) doChangeListRecv(relToRoot, fsPath string, l, r *File, isPush bool) (cl []*Change, err error) {
+func (g *Commands) doChangeListRecv(relToRoot, fsPath string, l, r *File, isPush bool) (cl, clashes []*Change, err error) {
 	if l == nil && r == nil {
 		err = fmt.Errorf("'%s' aka '%s' doesn't exist locally nor remotely",
 			relToRoot, fsPath)
@@ -189,7 +188,7 @@ func (g *Commands) coercedMimeKey() (coerced string, ok bool) {
 }
 
 func (g *Commands) resolveChangeListRecv(
-	isPush bool, d, p string, r *File, l *File) (cl []*Change, err error) {
+	isPush bool, d, p string, r *File, l *File) (cl, clashes []*Change, err error) {
 	var change *Change
 
 	explicitlyRequested := g.opts.ExplicitlyExport && hasExportLinks(r) && len(g.opts.Exports) >= 1
@@ -198,9 +197,9 @@ func (g *Commands) resolveChangeListRecv(
 		// Handle the case of doc files for which we don't have a direct download
 		// url but have exportable links. These files should not be clobbered on push
 		if hasExportLinks(r) {
-			return cl, nil
+			return cl, clashes, nil
 		}
-		change = &Change{Path: p, Src: l, Dest: r, Parent: d}
+		change = &Change{Path: p, Src: l, Dest: r, Parent: d, g: g}
 	} else {
 		exportable := !g.opts.Force && hasExportLinks(r)
 		if exportable && !explicitlyRequested {
@@ -208,10 +207,10 @@ func (g *Commands) resolveChangeListRecv(
 			// but exportable links, we just need to check that mod times are the same.
 			mask := fileDifferences(r, l, g.opts.IgnoreChecksum)
 			if !dirTypeDiffers(mask) && !modTimeDiffers(mask) {
-				return cl, nil
+				return cl, clashes, nil
 			}
 		}
-		change = &Change{Path: p, Src: r, Dest: l, Parent: d}
+		change = &Change{Path: p, Src: r, Dest: l, Parent: d, g: g}
 	}
 
 	change.NoClobber = g.opts.NoClobber
@@ -225,7 +224,7 @@ func (g *Commands) resolveChangeListRecv(
 
 	forbiddenOp := (g.opts.ExcludeCrudMask & change.crudValue()) != 0
 	if forbiddenOp {
-		return cl, nil
+		return cl, clashes, nil
 	}
 
 	if change.Op() != OpNone {
@@ -233,15 +232,15 @@ func (g *Commands) resolveChangeListRecv(
 	}
 
 	if !g.opts.Recursive {
-		return cl, nil
+		return cl, clashes, nil
 	}
 
 	// TODO: handle cases where remote and local type don't match
 	if !isPush && r != nil && !r.IsDir {
-		return cl, nil
+		return cl, clashes, nil
 	}
 	if isPush && l != nil && !l.IsDir {
-		return cl, nil
+		return cl, clashes, nil
 	}
 
 	// look-up for children
@@ -263,18 +262,23 @@ func (g *Commands) resolveChangeListRecv(
 		remoteChildren = make(chan *File)
 		close(remoteChildren)
 	}
-	dirlist, clashes := merge(remoteChildren, localChildren, g.opts.IgnoreNameClashes)
+	dirlist, clashingFiles := merge(remoteChildren, localChildren, g.opts.IgnoreNameClashes)
 
-	if !g.opts.IgnoreNameClashes && len(clashes) >= 1 {
+	if !g.opts.IgnoreNameClashes && len(clashingFiles) >= 1 {
 		if rootLike(p) {
 			p = ""
 		}
 
-		for _, dup := range clashes {
-			g.log.LogErrf("\033[91mX\033[00m %s/%v \"%v\"\n", p, dup.Name, dup.Id)
+		for _, dup := range clashingFiles {
+			clashes = append(clashes, &Change{Path: sepJoin("/", p, dup.Name), Src: dup, g: g})
 		}
-		err = ErrClashesDetected
-		return
+
+		// Ensure all clashes are retrieved and listed
+		// TODO: Stop as soon a single clash is detected?
+		if false {
+			err = ErrClashesDetected
+			return cl, clashes, err
+		}
 	}
 
 	// Arbitrary value. TODO: Calibrate or calculate this value
@@ -290,13 +294,15 @@ func (g *Commands) resolveChangeListRecv(
 	var wg sync.WaitGroup
 	wg.Add(chunkCount)
 
+	clashesMap := make(map[int][]*Change)
+
 	for j := 0; j < chunkCount; j += 1 {
 		end := i + chunkSize
 		if end >= srcLen {
 			end = srcLen
 		}
 
-		go func(wg *sync.WaitGroup, isPush bool, cl *[]*Change, p string, dlist []*dirList) {
+		go func(id int, wg *sync.WaitGroup, isPush bool, cl *[]*Change, p string, dlist []*dirList) {
 			defer wg.Done()
 			for _, l := range dlist {
 				// Avoiding path.Join which normalizes '/+' to '/'
@@ -306,69 +312,85 @@ func (g *Commands) resolveChangeListRecv(
 				} else {
 					joined = strings.Join([]string{p, l.Name()}, "/")
 				}
-				childChanges, cErr := g.resolveChangeListRecv(isPush, p, joined, l.remote, l.local)
+				childChanges, childClashes, cErr := g.resolveChangeListRecv(isPush, p, joined, l.remote, l.local)
 				if cErr == nil {
 					*cl = append(*cl, childChanges...)
 					continue
 				}
 
 				if cErr == ErrClashesDetected {
-					break
+					clashesMap[id] = childClashes
+					continue
 				} else if cErr != ErrPathNotExists {
 					g.log.LogErrf("%s: %v\n", p, cErr)
 					break
 				}
 			}
-		}(&wg, isPush, &cl, p, dirlist[i:end])
+		}(j, &wg, isPush, &cl, p, dirlist[i:end])
 
 		i += chunkSize
 	}
 	wg.Wait()
-	return cl, nil
+
+	for _, cclashes := range clashesMap {
+		clashes = append(clashes, cclashes...)
+	}
+
+	if len(clashes) >= 1 {
+		err = ErrClashesDetected
+	}
+
+	return cl, clashes, err
 }
 
-func merge(remotes, locals chan *File, ignoreClashes bool) (merged []*dirList, clashesChan []*File) {
-	localsTrie := asciitrie.New()
-	remotesTrie := asciitrie.New()
+func merge(remotes, locals chan *File, ignoreClashes bool) (merged []*dirList, clashes []*File) {
+	localsMap := map[string]*File{}
+	remotesMap := map[string]*File{}
+
+	uniqClashes := map[string]bool{}
+
+	registerClash := func(v *File) {
+		key := v.Id
+		if key == "" {
+			key = v.Name
+		}
+		_, ok := uniqClashes[key]
+		if !ok {
+			uniqClashes[key] = true
+			clashes = append(clashes, v)
+		}
+	}
 
 	// TODO: Add support for FileSystems that allow same names but different files.
 	for l := range locals {
-		localsTrie.Set(l.Name, l)
+		localsMap[l.Name] = l
 	}
 
 	for r := range remotes {
 		list := &dirList{remote: r}
 
 		if !ignoreClashes {
-			evicted := remotesTrie.Set(r.Name, r)
-			if evicted != nil {
-				evictedFile, ok := evicted.(*File)
-				if ok {
-					clashesChan = append(clashesChan, evictedFile)
-				}
+			prev, present := remotesMap[r.Name]
+			if present {
+				registerClash(r)
+				registerClash(prev)
 				continue
 			}
+
+			remotesMap[r.Name] = r
 		}
 
-		mem, ok := localsTrie.Get(r.Name)
+		l, ok := localsMap[r.Name]
 		// look for local
-		if ok {
-			l, lOk := mem.(*File)
-			if lOk && (l.IsDir == r.IsDir) {
-				list.local = l
-				localsTrie.Pop(r.Name)
-			}
+		if ok && l != nil && l.IsDir == r.IsDir {
+			list.local = l
+			delete(localsMap, r.Name)
 		}
 		merged = append(merged, list)
 	}
 
 	// if anything left in locals, add to the dir listing
-	walk := localsTrie.Walk()
-	for item := range walk {
-		l, ok := item.(*File)
-		if !ok {
-			continue
-		}
+	for _, l := range localsMap {
 		merged = append(merged, &dirList{local: l})
 	}
 	return
@@ -453,9 +475,26 @@ func conflictsPersist(conflicts []*Change) bool {
 }
 
 func warnConflictsPersist(logy *log.Logger, conflicts []*Change) {
-	logy.LogErrf("These %d file(s) would be overwritten. Use -%s to override this behaviour\n", len(conflicts), CLIOptionIgnoreConflict)
-	for _, conflict := range conflicts {
-		logy.LogErrln(conflict.Path)
+	_warnChangeStopper(logy, conflicts, "\033[31mX\033[00m", "These %d file(s) would be overwritten. Use -%s to override this behaviour\n", len(conflicts), CLIOptionIgnoreConflict)
+}
+
+func warnClashesPersist(logy *log.Logger, conflicts []*Change) {
+	_warnChangeStopper(logy, conflicts, "\033[31mX\033[00m", "These paths clash\n")
+}
+
+func _warnChangeStopper(logy *log.Logger, items []*Change, perItemPrefix, fmt_ string, args ...interface{}) {
+	logy.LogErrf(fmt_, args...)
+	for _, item := range items {
+		if item != nil {
+			fileId := ""
+			if item.Src != nil && item.Src.Id != "" {
+				fileId = item.Src.Id
+			} else if item.Dest != nil && item.Dest.Id != "" {
+				fileId = item.Dest.Id
+			}
+
+			logy.LogErrln(perItemPrefix, item.Path, fileId)
+		}
 	}
 }
 
@@ -481,7 +520,17 @@ func opChangeCount(changes []*Change) map[Operation]sizeCounter {
 	return opMap
 }
 
-func previewChanges(logy *log.Logger, cl []*Change, reduce bool, opMap map[Operation]sizeCounter) {
+type changeListArg struct {
+	logy      *log.Logger
+	changes   []*Change
+	noPrompt  bool
+	noClobber bool
+}
+
+func previewChanges(clArgs *changeListArg, reduce bool, opMap map[Operation]sizeCounter) {
+	logy := clArgs.logy
+	cl := clArgs.changes
+
 	for _, c := range cl {
 		op := c.Op()
 		if op != OpNone {
@@ -500,17 +549,17 @@ func previewChanges(logy *log.Logger, cl []*Change, reduce bool, opMap map[Opera
 	}
 }
 
-func printChangeList(logy *log.Logger, changes []*Change, noPrompt bool, noClobber bool) (bool, *map[Operation]sizeCounter) {
-	if len(changes) == 0 {
-		logy.Logln("Everything is up-to-date.")
+func printChangeList(clArg *changeListArg) (bool, *map[Operation]sizeCounter) {
+	if len(clArg.changes) == 0 {
+		clArg.logy.Logln("Everything is up-to-date.")
 		return false, nil
 	}
-	if noPrompt {
+	if clArg.noPrompt {
 		return true, nil
 	}
 
-	opMap := opChangeCount(changes)
-	previewChanges(logy, changes, true, opMap)
+	opMap := opChangeCount(clArg.changes)
+	previewChanges(clArg, true, opMap)
 
 	return promptForChanges(), &opMap
 }

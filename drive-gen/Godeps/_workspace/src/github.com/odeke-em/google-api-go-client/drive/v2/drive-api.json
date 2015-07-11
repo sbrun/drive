@@ -1,11 +1,11 @@
 {
  "kind": "discovery#restDescription",
- "etag": "\"ye6orv2F-1npMW3u9suM3a7C5Bo/q7G5QdguNPp3b-d0oF62ZLMOZNU\"",
+ "etag": "\"ye6orv2F-1npMW3u9suM3a7C5Bo/2GklHAwx5ffZUxuQnPgLyVNUl4I\"",
  "discoveryVersion": "v1",
  "id": "drive:v2",
  "name": "drive",
  "version": "v2",
- "revision": "20150326",
+ "revision": "20150618",
  "title": "Drive API",
  "description": "The API to interact with Drive.",
  "ownerDomain": "google.com",
@@ -79,7 +79,7 @@
      "description": "View your Google Drive apps"
     },
     "https://www.googleapis.com/auth/drive.file": {
-     "description": "View and manage Google Drive files that you have opened or created with this app"
+     "description": "View and manage Google Drive files and folders that you have opened or created with this app"
     },
     "https://www.googleapis.com/auth/drive.metadata": {
      "description": "View and manage metadata of files in your Google Drive"
@@ -137,7 +137,7 @@
     },
     "domainSharingPolicy": {
      "type": "string",
-     "description": "The domain sharing policy for the current user."
+     "description": "The domain sharing policy for the current user. Possible values are:  \n- ALLOWED \n- ALLOWED_WITH_WARNING \n- INCOMING_ONLY \n- DISALLOWED"
     },
     "etag": {
      "type": "string",
@@ -891,6 +891,10 @@
      "type": "boolean",
      "description": "Whether this file is in the Application Data folder."
     },
+    "canComment": {
+     "type": "boolean",
+     "description": "Whether the current user can comment on the file."
+    },
     "copyable": {
      "type": "boolean",
      "description": "Whether the file can be copied by the current user."
@@ -909,8 +913,7 @@
      "description": "A short description of the file."
     },
     "downloadUrl": {
-     "type": "string",
-     "description": "Short lived download URL for the file. This is only populated for files with content stored in Drive."
+     "type": "string"
     },
     "editable": {
      "type": "boolean",
@@ -926,7 +929,7 @@
     },
     "explicitlyTrashed": {
      "type": "boolean",
-     "description": "Whether this file has been explicitly trashed, as opposed to recursively trashed. This will only be populated if the file is trashed."
+     "description": "Whether this file has been explicitly trashed, as opposed to recursively trashed."
     },
     "exportLinks": {
      "type": "object",
@@ -1166,6 +1169,10 @@
      "type": "string",
      "description": "The original filename if the file was uploaded manually, or the original title if the file was inserted through the API. Note that renames of the title will not change the original filename. This will only be populated on files with content stored in Drive."
     },
+    "ownedByMe": {
+     "type": "boolean",
+     "description": "Whether the file is owned by the current user."
+    },
     "ownerNames": {
      "type": "array",
      "description": "Name(s) of the owner(s) of this file.",
@@ -1210,6 +1217,10 @@
      "type": "string",
      "description": "A link back to this file."
     },
+    "shareable": {
+     "type": "boolean",
+     "description": "Whether the file's sharing settings can be modified by the current user."
+    },
     "shared": {
      "type": "boolean",
      "description": "Whether the file has been shared."
@@ -1222,6 +1233,13 @@
     "sharingUser": {
      "$ref": "User",
      "description": "User that shared the item with the current user, if available."
+    },
+    "spaces": {
+     "type": "array",
+     "description": "The list of spaces which contain the file. Supported values are 'drive' and 'appDataFolder'.",
+     "items": {
+      "type": "string"
+     }
     },
     "thumbnail": {
      "type": "object",
@@ -1885,6 +1903,11 @@
        "description": "Page token for changes.",
        "location": "query"
       },
+      "spaces": {
+       "type": "string",
+       "description": "A comma-separated list of spaces to query. Supported values are 'drive' and 'appDataFolder'.",
+       "location": "query"
+      },
       "startChangeId": {
        "type": "string",
        "description": "Change ID to start listing changes from.",
@@ -1935,6 +1958,11 @@
       "pageToken": {
        "type": "string",
        "description": "Page token for changes.",
+       "location": "query"
+      },
+      "spaces": {
+       "type": "string",
+       "description": "A comma-separated list of spaces to query. Supported values are 'drive' and 'appDataFolder'.",
        "location": "query"
       },
       "startChangeId": {
@@ -2155,8 +2183,7 @@
      ],
      "scopes": [
       "https://www.googleapis.com/auth/drive",
-      "https://www.googleapis.com/auth/drive.file",
-      "https://www.googleapis.com/auth/drive.readonly"
+      "https://www.googleapis.com/auth/drive.file"
      ]
     },
     "get": {
@@ -2372,7 +2399,7 @@
       },
       "ocrLanguage": {
        "type": "string",
-       "description": "If ocr is true, hints at the language to use. Valid values are ISO 639-1 codes.",
+       "description": "If ocr is true, hints at the language to use. Valid values are BCP 47 codes.",
        "location": "query"
       },
       "pinned": {
@@ -2534,7 +2561,7 @@
       },
       "ocrLanguage": {
        "type": "string",
-       "description": "If ocr is true, hints at the language to use. Valid values are ISO 639-1 codes.",
+       "description": "If ocr is true, hints at the language to use. Valid values are BCP 47 codes.",
        "location": "query"
       },
       "pinned": {
@@ -2654,6 +2681,11 @@
        "type": "string",
        "description": "Query string for searching files.",
        "location": "query"
+      },
+      "spaces": {
+       "type": "string",
+       "description": "A comma-separated list of spaces to query. Supported values are 'drive' and 'appDataFolder'.",
+       "location": "query"
       }
      },
      "response": {
@@ -2694,7 +2726,7 @@
       },
       "newRevision": {
        "type": "boolean",
-       "description": "Whether a blob upload should create a new revision. If false, the blob data in the current head revision is replaced. If true or not set, a new blob is created as head revision, and previous revisions are preserved (causing increased use of the user's data storage quota).",
+       "description": "Whether a blob upload should create a new revision. If false, the blob data in the current head revision is replaced. If true or not set, a new blob is created as head revision, and previous unpinned revisions are preserved for a short period of time. Pinned revisions are stored indefinitely, using additional storage quota, up to a maximum of 200 revisions.",
        "default": "true",
        "location": "query"
       },
@@ -2706,7 +2738,7 @@
       },
       "ocrLanguage": {
        "type": "string",
-       "description": "If ocr is true, hints at the language to use. Valid values are ISO 639-1 codes.",
+       "description": "If ocr is true, hints at the language to use. Valid values are BCP 47 codes.",
        "location": "query"
       },
       "pinned": {
@@ -2871,7 +2903,7 @@
       },
       "newRevision": {
        "type": "boolean",
-       "description": "Whether a blob upload should create a new revision. If false, the blob data in the current head revision is replaced. If true or not set, a new blob is created as head revision, and previous revisions are preserved (causing increased use of the user's data storage quota).",
+       "description": "Whether a blob upload should create a new revision. If false, the blob data in the current head revision is replaced. If true or not set, a new blob is created as head revision, and previous unpinned revisions are preserved for a short period of time. Pinned revisions are stored indefinitely, using additional storage quota, up to a maximum of 200 revisions.",
        "default": "true",
        "location": "query"
       },
@@ -2883,7 +2915,7 @@
       },
       "ocrLanguage": {
        "type": "string",
-       "description": "If ocr is true, hints at the language to use. Valid values are ISO 639-1 codes.",
+       "description": "If ocr is true, hints at the language to use. Valid values are BCP 47 codes.",
        "location": "query"
       },
       "pinned": {

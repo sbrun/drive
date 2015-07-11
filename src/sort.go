@@ -236,10 +236,9 @@ func (g *Commands) sort(fl []*File, attrStrValues ...string) []*File {
 
 		if reverse {
 			sortInterface = sort.Reverse(sortInterface)
-		} else {
-			// Stable is needed if more than one sort keyword is used
-			sort.Stable(sortInterface)
 		}
+		// Stable is needed if more than one sort keyword is used
+		sort.Stable(sortInterface)
 	}
 
 	return fl

@@ -57,22 +57,35 @@ func (g *Commands) Push() (err error) {
 		os.Exit(1)
 	}()
 
+	// TODO: Look at clashes?
+	clashes := []*Change{}
+
 	for _, relToRootPath := range g.opts.Sources {
 		fsPath := g.context.AbsPathOf(relToRootPath)
-		ccl, cErr := g.changeListResolve(relToRootPath, fsPath, true)
+		ccl, cclashes, cErr := g.changeListResolve(relToRootPath, fsPath, true)
 		if cErr != nil {
-			spin.stop()
-			return cErr
+			if cErr == ErrClashesDetected {
+				clashes = append(clashes, cclashes...)
+				continue
+			} else {
+				spin.stop()
+				return cErr
+			}
 		}
 		if len(ccl) > 0 {
 			cl = append(cl, ccl...)
 		}
 	}
 
+	if len(clashes) >= 1 {
+		warnClashesPersist(g.log, clashes)
+		return ErrClashesDetected
+	}
+
 	mount := g.opts.Mount
 	if mount != nil {
 		for _, mt := range mount.Points {
-			ccl, cerr := lonePush(g, root, mt.Name, mt.MountPath)
+			ccl, _, cerr := lonePush(g, root, mt.Name, mt.MountPath)
 			if cerr == nil {
 				cl = append(cl, ccl...)
 			}
@@ -117,7 +130,14 @@ func (g *Commands) Push() (err error) {
 		}
 	}
 
-	ok, opMap := printChangeList(g.log, nonConflicts, !g.opts.canPrompt(), g.opts.NoClobber)
+	clArg := changeListArg{
+		logy:      g.log,
+		changes:   nonConflicts,
+		noPrompt:  !g.opts.canPrompt(),
+		noClobber: g.opts.NoClobber,
+	}
+
+	ok, opMap := printChangeList(&clArg)
 	if !ok {
 		return
 	}
@@ -201,7 +221,7 @@ func (g *Commands) PushPiped() (err error) {
 		}
 
 		index := rem.ToIndex()
-		wErr := g.context.SerializeIndex(index, g.context.AbsPathOf(""))
+		wErr := g.context.SerializeIndex(index)
 
 		// TODO: Should indexing errors be reported?
 		if wErr != nil {
@@ -212,7 +232,7 @@ func (g *Commands) PushPiped() (err error) {
 }
 
 func (g *Commands) deserializeIndex(identifier string) *config.Index {
-	index, err := g.context.DeserializeIndex(g.context.AbsPathOf(""), identifier)
+	index, err := g.context.DeserializeIndex(identifier)
 	if err != nil {
 		return nil
 	}
@@ -358,7 +378,7 @@ func (g *Commands) mapChanges(srcChan chan interface{}, f func(*Change) error) {
 	ration.Wait()
 }
 
-func lonePush(g *Commands, parent, absPath, path string) (cl []*Change, err error) {
+func lonePush(g *Commands, parent, absPath, path string) (cl, clashes []*Change, err error) {
 	r, err := g.rem.FindByPath(absPath)
 	if err != nil && err != ErrPathNotExists {
 		return
@@ -395,6 +415,7 @@ func (g *Commands) remoteMod(change *Change) (err error) {
 	}
 
 	absPath := g.context.AbsPathOf(change.Path)
+
 	var parent *File
 	if change.Dest != nil && change.Src != nil {
 		change.Src.Id = change.Dest.Id // TODO: bad hack
@@ -404,7 +425,14 @@ func (g *Commands) remoteMod(change *Change) (err error) {
 	parent, err = g.remoteMkdirAll(parentPath)
 
 	if err != nil {
+		g.log.LogErrf("remoteMod/remoteMkdirAll: `%s` got %v\n", parentPath, err)
 		return err
+	}
+
+	if parent == nil {
+		err = errCannotMkdirAll(parentPath)
+		g.log.LogErrln(err)
+		return
 	}
 
 	args := upsertOpt{
@@ -432,7 +460,7 @@ func (g *Commands) remoteMod(change *Change) (err error) {
 		return
 	}
 	index := rem.ToIndex()
-	wErr := g.context.SerializeIndex(index, g.context.AbsPathOf(""))
+	wErr := g.context.SerializeIndex(index)
 
 	// TODO: Should indexing errors be reported?
 	if wErr != nil {
@@ -443,10 +471,6 @@ func (g *Commands) remoteMod(change *Change) (err error) {
 
 func (g *Commands) remoteAdd(change *Change) (err error) {
 	return g.remoteMod(change)
-}
-
-func (g *Commands) indexAbsPath(fileId string) string {
-	return config.IndicesAbsPath(g.context.AbsPathOf(""), fileId)
 }
 
 func (g *Commands) remoteUntrash(change *Change) (err error) {
@@ -461,7 +485,7 @@ func (g *Commands) remoteUntrash(change *Change) (err error) {
 	}
 
 	index := target.ToIndex()
-	wErr := g.context.SerializeIndex(index, g.context.AbsPathOf(""))
+	wErr := g.context.SerializeIndex(index)
 
 	// TODO: Should indexing errors be reported?
 	if wErr != nil {
@@ -480,10 +504,12 @@ func remoteRemover(g *Commands, change *Change, fn func(string) error) (err erro
 		return
 	}
 
-	indexPath := g.indexAbsPath(change.Dest.Id)
-	if rmErr := os.Remove(indexPath); rmErr != nil {
+	index := change.Dest.ToIndex()
+	err = g.context.RemoveIndex(index, g.context.AbsPathOf(""))
+
+	if err != nil {
 		if change.Src != nil {
-			g.log.LogErrf("%s \"%s\": remove indexfile %v\n", change.Path, change.Dest.Id, rmErr)
+			g.log.LogErrf("%s \"%s\": remove indexfile %v\n", change.Path, change.Dest.Id, err)
 		}
 	}
 	return
@@ -500,7 +526,12 @@ func (g *Commands) remoteDelete(change *Change) error {
 func (g *Commands) remoteMkdirAll(d string) (file *File, err error) {
 	// Try the lookup one last time in case a coroutine raced us to it.
 	retrFile, retryErr := g.rem.FindByPath(d)
-	if retryErr == nil && retrFile != nil {
+
+	if retryErr != nil && retryErr != ErrPathNotExists {
+		return retrFile, retryErr
+	}
+
+	if retrFile != nil {
 		return retrFile, nil
 	}
 
@@ -530,16 +561,23 @@ func (g *Commands) remoteMkdirAll(d string) (file *File, err error) {
 	}
 
 	parent, parentErr = g.rem.UpsertByComparison(&args)
-	if parentErr == nil && parent != nil {
-		index := parent.ToIndex()
-		wErr := g.context.SerializeIndex(index, g.context.AbsPathOf(""))
-
-		// TODO: Should indexing errors be reported?
-		if wErr != nil {
-			g.log.LogErrf("serializeIndex %s: %v\n", parent.Name, wErr)
-		}
+	if parentErr != nil {
+		return parent, parentErr
 	}
-	return parent, parentErr
+
+	if parent == nil {
+		return parent, ErrPathNotExists
+	}
+
+	index := parent.ToIndex()
+	wErr := g.context.SerializeIndex(index)
+
+	// TODO: Should indexing errors be reported?
+	if wErr != nil {
+		g.log.LogErrf("serializeIndex %s: %v\n", parent.Name, wErr)
+	}
+
+	return parent, nil
 }
 
 func namedPipe(mode os.FileMode) bool {
@@ -566,14 +604,14 @@ func list(context *config.Context, p string, hidden bool, ignore *regexp.Regexp)
 			if fileName == config.GDDirSuffix {
 				continue
 			}
-			if ignore != nil && ignore.Match([]byte(fileName)) {
-				continue
-			}
 			if isHidden(fileName, hidden) {
 				continue
 			}
 
 			resPath := gopath.Join(absPath, fileName)
+			if anyMatch(ignore, fileName, resPath) {
+				continue
+			}
 
 			// TODO: (@odeke-em) decide on how to deal with isFifo
 			if namedPipe(file.Mode()) {
@@ -587,6 +625,10 @@ func list(context *config.Context, p string, hidden bool, ignore *regexp.Regexp)
 				var symResolvPath string
 				symResolvPath, err = filepath.EvalSymlinks(resPath)
 				if err != nil {
+					continue
+				}
+
+				if anyMatch(ignore, symResolvPath) {
 					continue
 				}
 

@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -63,15 +62,20 @@ const (
 )
 
 var (
-	ErrPathNotExists   = errors.New("remote path doesn't exist")
-	ErrNetLookup       = errors.New("net lookup failed")
-	ErrClashesDetected = fmt.Errorf("clashes detected. use `%s` to override this behavior", CLIOptionIgnoreNameClashes)
+	ErrPathNotExists                  = errors.New("remote path doesn't exist")
+	ErrNetLookup                      = errors.New("net lookup failed")
+	ErrClashesDetected                = fmt.Errorf("clashes detected. use `%s` to override this behavior", CLIOptionIgnoreNameClashes)
+	ErrGoogleApiInvalidQueryHardCoded = errors.New("googleapi: Error 400: Invalid query, invalid")
 )
 
 var (
 	UnescapedPathSep = fmt.Sprintf("%c", os.PathSeparator)
 	EscapedPathSep   = url.QueryEscape(UnescapedPathSep)
 )
+
+func errCannotMkdirAll(p string) error {
+	return fmt.Errorf("cannot mkdirAll: `%s`", p)
+}
 
 type Remote struct {
 	client       *http.Client
@@ -195,6 +199,9 @@ func (r *Remote) FindByPathTrashed(p string) (file *File, err error) {
 
 func reqDoPage(req *drive.FilesListCall, hidden bool, promptOnPagination bool) chan *File {
 	fileChan := make(chan *File)
+
+	throttle := time.Tick(1e7)
+
 	go func() {
 		pageToken := ""
 		for {
@@ -206,10 +213,13 @@ func reqDoPage(req *drive.FilesListCall, hidden bool, promptOnPagination bool) c
 				fmt.Println(err)
 				break
 			}
+
+			iterCount := uint64(0)
 			for _, f := range results.Items {
 				if isHidden(f.Title, hidden) { // ignore hidden files
 					continue
 				}
+				iterCount += 1
 				fileChan <- NewRemoteFile(f)
 			}
 			pageToken = results.NextPageToken
@@ -217,11 +227,17 @@ func reqDoPage(req *drive.FilesListCall, hidden bool, promptOnPagination bool) c
 				break
 			}
 
+			if iterCount < 1 {
+				<-throttle
+				continue
+			}
+
 			if promptOnPagination && !nextPage() {
 				fileChan <- nil
 				break
 			}
 		}
+
 		close(fileChan)
 	}()
 	return fileChan
@@ -229,7 +245,7 @@ func reqDoPage(req *drive.FilesListCall, hidden bool, promptOnPagination bool) c
 
 func (r *Remote) findByParentIdRaw(parentId string, trashed, hidden bool) (fileChan chan *File) {
 	req := r.service.Files.List()
-	req.Q(fmt.Sprintf("%s in parents and trashed=%v", strconv.Quote(parentId), trashed))
+	req.Q(fmt.Sprintf("%s in parents and trashed=%v", customQuote(parentId), trashed))
 	return reqDoPage(req, hidden, false)
 }
 
@@ -436,6 +452,10 @@ func (r *Remote) upsertByComparison(body io.Reader, args *upsertOpt) (f *File, m
 		uploaded.MimeType = DriveFolderMimeType
 	}
 
+	if args.src.MimeType != "" {
+		uploaded.MimeType = args.src.MimeType
+	}
+
 	if args.mimeKey != "" {
 		uploaded.MimeType = guessMimeType(args.mimeKey)
 	}
@@ -634,8 +654,8 @@ func (r *Remote) FindByPathShared(p string) (chan *File, error) {
 	return r.findShared(nonEmpty)
 }
 
-func (r *Remote) FindMatches(dirPath string, keywords []string, inTrash bool) (chan *File, error) {
-	parent, err := r.FindByPath(dirPath)
+func (r *Remote) FindMatches(mq *matchQuery) (chan *File, error) {
+	parent, err := r.FindByPath(mq.dirPath)
 	filesChan := make(chan *File)
 	if err != nil || parent == nil {
 		close(filesChan)
@@ -643,23 +663,17 @@ func (r *Remote) FindMatches(dirPath string, keywords []string, inTrash bool) (c
 	}
 
 	req := r.service.Files.List()
-	keySearches := make([]string, len(keywords))
 
-	for i, key := range keywords {
-		quoted := strconv.Quote(key)
-		keySearches[i] = fmt.Sprintf("(title contains %s and trashed=%v)", quoted, inTrash)
-	}
+	parQuery := fmt.Sprintf("(%s in parents)", customQuote(parent.Id))
+	expr := sepJoinNonEmpty(" and ", parQuery, mq.Stringer())
 
-	expr := strings.Join(keySearches, " or ")
-	// And always make sure that we are searching from this parent
-	expr = fmt.Sprintf("%s in parents and (%s)", strconv.Quote(parent.Id), expr)
 	req.Q(expr)
 	return reqDoPage(req, true, false), nil
 }
 
 func (r *Remote) findChildren(parentId string, trashed bool) chan *File {
 	req := r.service.Files.List()
-	req.Q(fmt.Sprintf("%s in parents and trashed=%v", strconv.Quote(parentId), trashed))
+	req.Q(fmt.Sprintf("%s in parents and trashed=%v", customQuote(parentId), trashed))
 	return reqDoPage(req, true, false)
 }
 
@@ -673,12 +687,11 @@ func (r *Remote) findByPathRecvRaw(parentId string, p []string, trashed bool) (f
 	// TODO: use field selectors
 	var expr string
 	head := urlToPath(p[0], false)
-	quote := strconv.Quote
 	if trashed {
-		expr = fmt.Sprintf("title = %s and trashed=true", quote(head))
+		expr = fmt.Sprintf("title = %s and trashed=true", customQuote(head))
 	} else {
 		expr = fmt.Sprintf("%s in parents and title = %s and trashed=false",
-			quote(parentId), quote(head))
+			customQuote(parentId), customQuote(head))
 	}
 	req.Q(expr)
 
@@ -688,6 +701,9 @@ func (r *Remote) findByPathRecvRaw(parentId string, p []string, trashed bool) (f
 	files, err := req.Do()
 
 	if err != nil {
+		if err.Error() == ErrGoogleApiInvalidQueryHardCoded.Error() { // Send the user back the query information
+			err = fmt.Errorf("err: %v query: `%s`", err, expr)
+		}
 		return nil, err
 	}
 

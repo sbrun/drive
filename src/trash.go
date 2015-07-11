@@ -117,7 +117,7 @@ func (g *Commands) trasher(relToRoot string, opt *trashOpt) (*Change, error) {
 		relToRoot = fmt.Sprintf("%s (%s)", relToRoot, file.Name)
 	}
 
-	change := &Change{Path: relToRoot}
+	change := &Change{Path: relToRoot, g: g}
 	if opt.toTrash {
 		change.Dest = file
 	} else {
@@ -127,7 +127,15 @@ func (g *Commands) trasher(relToRoot string, opt *trashOpt) (*Change, error) {
 }
 
 func (g *Commands) trashByMatch(inTrash, permanent bool) error {
-	matches, err := g.rem.FindMatches(g.opts.Path, g.opts.Sources, inTrash)
+	mq := matchQuery{
+		dirPath: g.opts.Path,
+		inTrash: false,
+		titleSearches: []fuzzyStringsValuePair{
+			{fuzzyLevel: Like, values: g.opts.Sources, inTrash: inTrash},
+		},
+	}
+
+	matches, err := g.rem.FindMatches(&mq)
 	if err != nil {
 		return err
 	}
@@ -140,7 +148,7 @@ func (g *Commands) trashByMatch(inTrash, permanent bool) error {
 		if match == nil {
 			continue
 		}
-		ch := &Change{Path: p + "/" + match.Name}
+		ch := &Change{Path: p + "/" + match.Name, g: g}
 		if inTrash {
 			ch.Src = match
 		} else {
@@ -153,12 +161,19 @@ func (g *Commands) trashByMatch(inTrash, permanent bool) error {
 		return fmt.Errorf("no matches found!")
 	}
 
-	toTrash := !inTrash
-	ok, _ := printChangeList(g.log, cl, !g.opts.canPrompt(), false)
+	clArg := changeListArg{
+		logy:      g.log,
+		changes:   cl,
+		noPrompt:  !g.opts.canPrompt(),
+		noClobber: false,
+	}
+
+	ok, _ := printChangeList(&clArg)
 	if !ok {
 		return nil
 	}
 
+	toTrash := !inTrash
 	opt := trashOpt{
 		toTrash:   toTrash,
 		permanent: permanent,
@@ -190,10 +205,18 @@ func (g *Commands) reduceForTrash(args []string, opt *trashOpt) error {
 		}
 	}
 
-	ok, _ := printChangeList(g.log, cl, !g.opts.canPrompt(), false)
+	clArg := changeListArg{
+		logy:      g.log,
+		changes:   cl,
+		noPrompt:  !g.opts.canPrompt(),
+		noClobber: false,
+	}
+
+	ok, _ := printChangeList(&clArg)
 	if !ok {
 		return nil
 	}
+
 	if opt.permanent && g.opts.canPrompt() {
 		if !promptForChanges("This operation is irreversible. Continue [Y/N] ") {
 			return nil

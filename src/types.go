@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/odeke-em/drive/config"
@@ -28,9 +30,10 @@ import (
 type Operation int
 
 const (
-	OpNone = iota
+	OpNone Operation = 1 << iota
 	OpAdd
 	OpDelete
+	OpIndexAddition
 	OpMod
 	OpModConflict
 )
@@ -39,7 +42,7 @@ type CrudValue int
 
 const (
 	None   CrudValue = 0
-	Create           = 1 << iota
+	Create CrudValue = 1 << iota
 	Read
 	Update
 	Delete
@@ -190,6 +193,7 @@ type Change struct {
 	NoClobber      bool
 	IgnoreConflict bool
 	IgnoreChecksum bool
+	g              *Commands
 }
 
 type ByPrecedence []*Change
@@ -226,6 +230,8 @@ func (op *Operation) description() (symbol, info string) {
 		return "\033[31m-\033[0m", "Deletion"
 	case OpMod:
 		return "\033[33mM\033[0m", "Modification"
+	case OpIndexAddition:
+		return "\033[34mI+\033[0m", "Index addition"
 	case OpModConflict:
 		return "\033[35mX\033[0m", "Clashing modification"
 	default:
@@ -338,17 +344,23 @@ func (c *Change) op() Operation {
 	if c.Src == nil && c.Dest == nil {
 		return OpNone
 	}
+
+	indexingOnly := c.g.opts.indexingOnly
 	if c.Src != nil && c.Dest == nil {
-		return OpAdd
+		return indexExistanceOrDeferTo(c, OpAdd, indexingOnly)
 	}
 	if c.Src == nil && c.Dest != nil {
-		return OpDelete
+		return indexExistanceOrDeferTo(c, OpDelete, indexingOnly)
 	}
 	if c.Src.IsDir != c.Dest.IsDir {
-		return OpMod
+		return indexExistanceOrDeferTo(c, OpMod, indexingOnly)
 	}
 	if c.Src.IsDir {
-		return OpNone
+		return indexExistanceOrDeferTo(c, OpNone, indexingOnly)
+	}
+
+	if indexingOnly {
+		return indexExistanceOrDeferTo(c, OpNone, indexingOnly)
 	}
 
 	mask := fileDifferences(c.Src, c.Dest, c.IgnoreChecksum)
@@ -362,8 +374,46 @@ func (c *Change) op() Operation {
 	if modTimeDiffers(mask) {
 		return OpMod
 	}
-
 	return OpNone
+}
+
+func indexExistanceOrDeferTo(c *Change, deferTo Operation, indexingOnly bool) Operation {
+	if !indexingOnly {
+		return deferTo
+	} else if deferTo != OpNone {
+		return OpNone
+	}
+	ok, err := c.checkIndexExistance()
+	if err != nil && err != config.ErrNoSuchDbKey {
+		c.g.log.LogErrf("checkIndexExists: \"%s\" %v\n", c.Path, err)
+	}
+
+	if !ok {
+		return OpIndexAddition
+	}
+
+	return deferTo
+}
+
+func (c *Change) checkIndexExistance() (bool, error) {
+	var f *File = nil
+	if c.Src != nil && c.Src.Id != "" {
+		f = c.Src
+	} else if c.Dest != nil && c.Dest.Id != "" {
+		f = c.Dest
+	}
+
+	if f == nil || f.Id == "" {
+		return false, nil
+	}
+
+	index, err := c.g.context.DeserializeIndex(f.Id)
+	if err != nil {
+		return false, err
+	}
+
+	exists := index != nil
+	return exists, nil
 }
 
 func (c *Change) Op() Operation {
@@ -392,4 +442,176 @@ func (f *File) ToIndex() *config.Index {
 		ModTime:     f.ModTime.Unix(),
 		Version:     f.Version,
 	}
+}
+
+type fuzzyStringsValuePair struct {
+	fuzzyLevel fuzziness
+	inTrash    bool
+	joiner     joiner
+	values     []string
+}
+
+type matchQuery struct {
+	dirPath           string
+	inTrash           bool
+	keywordSearches   []fuzzyStringsValuePair
+	mimeQuerySearches []fuzzyStringsValuePair
+	titleSearches     []fuzzyStringsValuePair
+	ownerSearches     []fuzzyStringsValuePair
+}
+
+type fuzziness int
+
+const (
+	Not fuzziness = 1 << iota
+	Like
+	NotIn
+	Is
+)
+
+func (fz *fuzziness) Stringer() string {
+	switch *fz {
+	case Not:
+		return "!="
+	case NotIn:
+		return "not in"
+	case Like:
+		return "contains"
+	case Is:
+		return "="
+	}
+
+	return "="
+}
+
+type joiner int
+
+const (
+	Or joiner = 1 << iota
+	And
+)
+
+func (jn *joiner) Stringer() string {
+	switch *jn {
+	case Or:
+		return "or"
+	case And:
+		return "and"
+	}
+	return "or"
+}
+
+func mimeQueryStringify(fz *fuzzyStringsValuePair) string {
+	fuzzyDesc := fz.fuzzyLevel.Stringer()
+
+	keySearches := []string{}
+	quote := strconv.Quote
+
+	for _, query := range fz.values {
+		resolvedMimeType := mimeTypeFromQuery(query)
+
+		// If it cannot be resolved, use the value passed in
+		if resolvedMimeType == "" {
+			resolvedMimeType = query
+		}
+
+		keySearches = append(keySearches, fmt.Sprintf("(mimeType %s %s)", fuzzyDesc, quote(resolvedMimeType)))
+	}
+
+	return strings.Join(keySearches, fmt.Sprintf(" %s ", fz.joiner.Stringer()))
+}
+
+func ownerQueryStringify(fz *fuzzyStringsValuePair) string {
+	keySearches := []string{}
+	quote := strconv.Quote
+
+	for _, owner := range fz.values {
+		query := ""
+		switch fz.fuzzyLevel {
+		case NotIn:
+			query = fmt.Sprintf("(not %s in owners)", quote(owner))
+		default:
+			fuzzyDesc := fz.fuzzyLevel.Stringer()
+			query = fmt.Sprintf("(%s %s owners)", quote(owner), fuzzyDesc)
+		}
+
+		keySearches = append(keySearches, query)
+	}
+
+	return strings.Join(keySearches, fmt.Sprintf(" %s ", fz.joiner.Stringer()))
+}
+
+func titleQueryStringify(fz *fuzzyStringsValuePair) string {
+	fuzzyDesc := fz.fuzzyLevel.Stringer()
+
+	keySearches := []string{}
+	quote := strconv.Quote
+
+	for _, title := range fz.values {
+		keySearches = append(keySearches, fmt.Sprintf("(title %s %s and trashed=%v)", fuzzyDesc, quote(title), fz.inTrash))
+	}
+
+	return strings.Join(keySearches, fmt.Sprintf(" %s ", fz.joiner.Stringer()))
+}
+
+func joinLists(exprJoiner string, expressions []string) string {
+	reduced := strings.TrimSpace(strings.Join(expressions, exprJoiner))
+	if reduced != "" {
+		reduced = fmt.Sprintf("(%s)", reduced)
+	}
+
+	return reduced
+}
+
+func (mq *matchQuery) Stringer() string {
+	overallSearchList := []string{}
+
+	mimeTranslations := []string{}
+	for _, fzPair := range mq.mimeQuerySearches {
+		query := mimeQueryStringify(&fzPair)
+		if query == "" {
+			continue
+		}
+
+		mimeTranslations = append(mimeTranslations, query)
+	}
+
+	titleTranslations := []string{}
+	for _, titleFzPair := range mq.titleSearches {
+		titleQuery := titleQueryStringify(&titleFzPair)
+		if titleQuery == "" {
+			continue
+		}
+
+		titleTranslations = append(titleTranslations, titleQuery)
+	}
+
+	ownerTranslations := []string{}
+	for _, ownerFzPair := range mq.ownerSearches {
+		ownerQuery := ownerQueryStringify(&ownerFzPair)
+		if ownerQuery == "" {
+			continue
+		}
+
+		ownerTranslations = append(ownerTranslations, ownerQuery)
+	}
+
+	exprPairs := []struct {
+		joiner   string
+		elements []string
+	}{
+		{" and ", mimeTranslations},
+		{" and ", titleTranslations},
+		{" and ", ownerTranslations},
+	}
+
+	for _, exprPair := range exprPairs {
+		expr := joinLists(exprPair.joiner, exprPair.elements)
+		if expr == "" {
+			continue
+		}
+		overallSearchList = append(overallSearchList, expr)
+	}
+
+	return strings.Join(overallSearchList, " and ")
 }

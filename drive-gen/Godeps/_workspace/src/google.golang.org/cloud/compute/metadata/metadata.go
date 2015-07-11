@@ -49,29 +49,13 @@ var (
 var metaClient = &http.Client{
 	Transport: &internal.Transport{
 		Base: &http.Transport{
-			Dial: dialer().Dial,
+			Dial: (&net.Dialer{
+				Timeout:   750 * time.Millisecond,
+				KeepAlive: 30 * time.Second,
+			}).Dial,
 			ResponseHeaderTimeout: 750 * time.Millisecond,
 		},
 	},
-}
-
-// go13Dialer is nil until we're using Go 1.3+.
-// This is a workaround for https://github.com/golang/oauth2/issues/70, where
-// net.Dialer.KeepAlive is unavailable on Go 1.2 (which App Engine as of
-// Jan 2015 still runs).
-//
-// TODO(bradfitz,jbd,adg,dsymonds): remove this once App Engine supports Go
-// 1.3+ and go-app-builder also supports 1.3+, or when Go 1.2 is no longer an
-// option on App Engine.
-var go13Dialer func() *net.Dialer
-
-func dialer() *net.Dialer {
-	if fn := go13Dialer; fn != nil {
-		return fn()
-	}
-	return &net.Dialer{
-		Timeout: 750 * time.Millisecond,
-	}
 }
 
 // NotDefinedError is returned when requested metadata is not defined.
@@ -194,14 +178,10 @@ func ExternalIP() (string, error) {
 	return getTrimmed("instance/network-interfaces/0/access-configs/0/external-ip")
 }
 
-// Hostname returns the instance's hostname. This will probably be of
-// the form "INSTANCENAME.c.PROJECT.internal" but that isn't
-// guaranteed.
-//
-// TODO: what is this defined to be? Docs say "The host name of the
-// instance."
+// Hostname returns the instance's hostname. This will be of the form
+// "<instanceID>.c.<projID>.internal".
 func Hostname() (string, error) {
-	return getTrimmed("network-interfaces/0/ip")
+	return getTrimmed("instance/hostname")
 }
 
 // InstanceTags returns the list of user-defined instance tags,
@@ -221,6 +201,25 @@ func InstanceTags() ([]string, error) {
 // InstanceID returns the current VM's numeric instance ID.
 func InstanceID() (string, error) {
 	return instID.get()
+}
+
+// InstanceName returns the current VM's instance ID string.
+func InstanceName() (string, error) {
+	host, err := Hostname()
+	if err != nil {
+		return "", err
+	}
+	return strings.Split(host, ".")[0], nil
+}
+
+// Zone returns the current VM's zone, such as "us-central1-b".
+func Zone() (string, error) {
+	zone, err := getTrimmed("instance/zone")
+	// zone is of the form "projects/<projNum>/zones/<zoneName>".
+	if err != nil {
+		return "", err
+	}
+	return zone[strings.LastIndex(zone, "/")+1:], nil
 }
 
 // InstanceAttributes returns the list of user-defined attributes,

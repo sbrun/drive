@@ -90,7 +90,8 @@ func (g *Commands) move(opt *moveOpt) (err error) {
 
 		// TODO: If oldParent is not found, retry since it may have been moved temporarily at least
 		if oldParent != nil && oldParent.Id == newParent.Id {
-			return nil
+			return fmt.Errorf("src and dest are the same srcParentId %s destParentId %s",
+				customQuote(oldParent.Id), customQuote(newParent.Id))
 		}
 	}
 
@@ -105,7 +106,7 @@ func (g *Commands) move(opt *moveOpt) (err error) {
 
 	if dupCheck != nil {
 		if dupCheck.Id == remSrc.Id { // Trying to move to self
-			return nil
+			return fmt.Errorf("move: trying to move fileId:%s to self fileId:%s", customQuote(dupCheck.Id), customQuote(remSrc.Id))
 		}
 		if !g.opts.Force {
 			return fmt.Errorf("%s already exists. Use `%s` flag to override this behaviour", newFullPath, ForceKey)

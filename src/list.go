@@ -46,6 +46,7 @@ type traversalSt struct {
 	inTrash          bool
 	explicitNoPrompt bool
 	sorters          []string
+	matchQuery       *matchQuery
 }
 
 func sorters(opts *Options) (sortKeys []string) {
@@ -62,7 +63,16 @@ func sorters(opts *Options) (sortKeys []string) {
 }
 
 func (g *Commands) ListMatches() error {
-	matches, err := g.rem.FindMatches(g.opts.Path, g.opts.Sources, g.opts.InTrash)
+
+	inTrash := trashed(g.opts.TypeMask)
+
+	mq := g.createMatchQuery(false)
+
+	mq.titleSearches = append(mq.titleSearches, fuzzyStringsValuePair{
+		fuzzyLevel: Like, values: g.opts.Sources, inTrash: inTrash, joiner: Or,
+	})
+
+	matches, err := g.rem.FindMatches(mq)
 	if err != nil {
 		return err
 	}
@@ -102,6 +112,68 @@ func (g *Commands) ListMatches() error {
 	return nil
 }
 
+func (g *Commands) createMatchQuery(exactMatch bool) *matchQuery {
+
+	mimeQuerySearches := []fuzzyStringsValuePair{}
+	titleSearches := []fuzzyStringsValuePair{}
+	ownerSearches := []fuzzyStringsValuePair{}
+
+	if g.opts.Meta != nil {
+		meta := *(g.opts.Meta)
+		skipMimes, sOk := meta[SkipMimeKeyKey]
+		if sOk {
+			mimeQuerySearches = append(mimeQuerySearches, fuzzyStringsValuePair{
+				fuzzyLevel: Not, values: skipMimes, inTrash: g.opts.InTrash, joiner: And,
+			})
+		}
+
+		matchMimes, mOk := meta[MatchMimeKeyKey]
+		if mOk {
+			mimeQuerySearches = append(mimeQuerySearches, fuzzyStringsValuePair{
+				fuzzyLevel: Is, values: matchMimes, inTrash: g.opts.InTrash, joiner: Or,
+			})
+		}
+
+		exactTitles, etOk := meta[ExactTitleKey]
+		if etOk {
+			titleSearches = append(titleSearches, fuzzyStringsValuePair{
+				fuzzyLevel: Is, values: exactTitles, inTrash: g.opts.InTrash, joiner: Or,
+			})
+		}
+
+		exactOwners, eoOk := meta[ExactOwnerKey]
+		if eoOk {
+			ownerSearches = append(ownerSearches, fuzzyStringsValuePair{
+				fuzzyLevel: Is, values: exactOwners, joiner: Or,
+			})
+		}
+
+		matchOwners, moOk := meta[MatchOwnerKey]
+		if moOk {
+			ownerSearches = append(ownerSearches, fuzzyStringsValuePair{
+				fuzzyLevel: Like, values: matchOwners, joiner: Or,
+			})
+		}
+
+		notOwner, soOk := meta[NotOwnerKey]
+		if soOk {
+			ownerSearches = append(ownerSearches, fuzzyStringsValuePair{
+				fuzzyLevel: NotIn, values: notOwner, joiner: And,
+			})
+		}
+	}
+
+	mq := matchQuery{
+		dirPath:           g.opts.Path,
+		inTrash:           g.opts.InTrash,
+		mimeQuerySearches: mimeQuerySearches,
+		titleSearches:     titleSearches,
+		ownerSearches:     ownerSearches,
+	}
+
+	return &mq
+}
+
 func (g *Commands) List(byId bool) error {
 	var kvList []*keyValue
 
@@ -111,6 +183,8 @@ func (g *Commands) List(byId bool) error {
 	} else if g.opts.InTrash {
 		resolver = g.rem.FindByPathTrashed
 	}
+
+	mq := g.createMatchQuery(true)
 
 	for _, relPath := range g.opts.Sources {
 		r, rErr := resolver(relPath)
@@ -151,12 +225,13 @@ func (g *Commands) List(byId bool) error {
 		}
 
 		travSt := traversalSt{
-			depth:    g.opts.Depth,
-			file:     kv.value.(*File),
-			headPath: kv.key,
-			inTrash:  g.opts.InTrash,
-			mask:     g.opts.TypeMask,
-			sorters:  sorters(g.opts),
+			depth:      g.opts.Depth,
+			file:       kv.value.(*File),
+			headPath:   kv.key,
+			inTrash:    g.opts.InTrash,
+			mask:       g.opts.TypeMask,
+			sorters:    sorters(g.opts),
+			matchQuery: mq,
 		}
 
 		if !g.breadthFirst(travSt, spin) {
@@ -294,6 +369,11 @@ func (g *Commands) breadthFirst(travSt traversalSt, spin *playable) bool {
 
 	expr := buildExpression(f.Id, travSt.mask, travSt.inTrash)
 
+	if travSt.matchQuery != nil {
+		exprExtra := travSt.matchQuery.Stringer()
+		expr = sepJoinNonEmpty(" and ", fmt.Sprintf("(%s)", expr), exprExtra)
+	}
+
 	req := g.rem.service.Files.List()
 	req.Q(expr)
 	req.MaxResults(g.opts.PageSize)
@@ -358,6 +438,7 @@ func (g *Commands) breadthFirst(travSt traversalSt, spin *playable) bool {
 				mask:             g.opts.TypeMask,
 				explicitNoPrompt: travSt.explicitNoPrompt,
 				sorters:          travSt.sorters,
+				matchQuery:       travSt.matchQuery,
 			}
 
 			if !g.breadthFirst(childSt, spin) {
@@ -384,4 +465,8 @@ func version(mask int) bool {
 
 func shared(mask int) bool {
 	return (mask & Shared) != 0
+}
+
+func trashed(mask int) bool {
+	return (mask & InTrash) != 0
 }

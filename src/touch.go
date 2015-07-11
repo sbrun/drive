@@ -60,7 +60,15 @@ func (g *Commands) Touch(byId bool) (err error) {
 }
 
 func (g *Commands) TouchByMatch() (err error) {
-	matches, err := g.rem.FindMatches(g.opts.Path, g.opts.Sources, false)
+	mq := matchQuery{
+		dirPath: g.opts.Path,
+		inTrash: false,
+		titleSearches: []fuzzyStringsValuePair{
+			{fuzzyLevel: Like, values: g.opts.Sources, inTrash: false},
+		},
+	}
+
+	matches, err := g.rem.FindMatches(&mq)
 	if err != nil {
 		return err
 	}

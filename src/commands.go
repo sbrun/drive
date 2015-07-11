@@ -83,6 +83,7 @@ type Options struct {
 	ExcludeCrudMask   CrudValue
 	ExplicitlyExport  bool
 	Md5sum            bool
+	indexingOnly      bool
 }
 
 type Commands struct {
