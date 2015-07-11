@@ -15,6 +15,7 @@
 - [Configuration](#configuration)
 - [Usage](#usage)
   - [Initializing](#initializing)
+  - [De Initializing](#de-initializing)
   - [Pulling](#pulling)
     - [Exporting Docs](#exporting-docs)
   - [Pushing](#pushing)
@@ -132,6 +133,17 @@ Before you can use `drive`, you need to mount your Google Drive directory on you
 $ drive init ~/gdrive
 $ cd ~/gdrive
 ```
+
+### De Initializing
+
+The opposite of `drive init`, it will remove your credentials locally as well as configuration associated files.
+
+```shell
+$ drive deinit [--no-prompt]
+```
+
+For a complete de-initializing don't forget to revoke account access, [please see revoking account access](#revoking-account-access)
+
 
 ### Pulling
 

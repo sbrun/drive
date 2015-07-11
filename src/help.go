@@ -28,6 +28,7 @@ const (
 	FeaturesKey   = "features"
 	HelpKey       = "help"
 	InitKey       = "init"
+	DeInitKey     = "deinit"
 	LinkKey       = "Link"
 	ListKey       = "list"
 	MoveKey       = "move"
@@ -95,6 +96,7 @@ const (
 	DescIndex                 = "fetch indices from remote"
 	DescHelp                  = "Get help for a topic"
 	DescInit                  = "initializes a directory and authenticates user"
+	DescDeInit                = "removes the user's credentials and initialized files"
 	DescList                  = "lists the contents of remote path"
 	DescMove                  = "move files/folders"
 	DescQuota                 = "prints out information related to your quota space"
@@ -150,6 +152,11 @@ const (
 	CLIOptionNotOwner           = "skip-owner"
 	CLIOptionPruneIndices       = "prune"
 	CLIOptionAllIndexOperations = "all-ops"
+)
+
+const (
+	GoogleApiClientIdEnvKey     = "GOOGLE_API_CLIENT_ID"
+	GoogleApiClientSecretEnvKey = "GOOGLE_API_CLIENT_SECRET"
 )
 
 const (

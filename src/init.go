@@ -21,8 +21,8 @@ import (
 )
 
 func (g *Commands) Init() error {
-	g.context.ClientId = os.Getenv("GOOGLE_API_CLIENT_ID")
-	g.context.ClientSecret = os.Getenv("GOOGLE_API_CLIENT_SECRET")
+	g.context.ClientId = os.Getenv(GoogleApiClientIdEnvKey)
+	g.context.ClientSecret = os.Getenv(GoogleApiClientSecretEnvKey)
 	if g.context.ClientId == "" || g.context.ClientSecret == "" {
 		g.context.ClientId = "354790962074-7rrlnuanmamgg1i4feed12dpuq871bvd.apps.googleusercontent.com"
 		g.context.ClientSecret = "RHjKdah8RrHFwu6fcc0uEVCw"
@@ -36,4 +36,16 @@ func (g *Commands) Init() error {
 
 	g.context.RefreshToken = refreshToken
 	return g.context.Write()
+}
+
+func (g *Commands) DeInit() error {
+	prompt := func(args ...interface{}) bool {
+		if !g.opts.canPrompt() {
+			return true
+		}
+
+		return promptForChanges(args...)
+	}
+
+	return g.context.DeInitialize(prompt, true)
 }

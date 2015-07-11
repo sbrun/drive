@@ -287,6 +287,30 @@ func (c *Context) Write() (err error) {
 	return ioutil.WriteFile(credentialsPath(c.AbsPath), data, 0600)
 }
 
+func (c *Context) DeInitialize(prompter func(...interface{}) bool, returnOnAnyError bool) (err error) {
+    rootDir := c.AbsPathOf("")
+    pathsToRemove := []string{
+	    credentialsPath(rootDir),
+	    DbSuffixedPath(rootDir),
+    }
+
+    for _, p := range pathsToRemove {
+        if !prompter("remove: ", p, ". This operation is permanent (Y/N) ") {
+            continue
+        }
+
+        rmErr := os.RemoveAll(p)
+        if rmErr != nil {
+            if returnOnAnyError {
+                return rmErr
+            }
+            fmt.Fprintf(os.Stderr, "deinit.removeAll: %s %v\n", p, rmErr)
+        }
+    }
+
+    return nil
+}
+
 // Discovers the gd directory, if no gd directory or credentials
 // could be found for the path, returns ErrNoContext.
 func Discover(currentAbsPath string) (context *Context, err error) {
@@ -321,7 +345,8 @@ func Initialize(absPath string) (pathGD string, firstInit bool, c *Context, err 
 	if sErr != nil {
 		if os.IsNotExist(sErr) {
 			firstInit = true
-		} else if !os.IsExist(sErr) { // An err not related to path existance
+		} else { // An err not related to path existance
+            err = sErr
 			return
 		}
 	}

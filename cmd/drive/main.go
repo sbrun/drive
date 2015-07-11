@@ -57,6 +57,7 @@ func main() {
 	bindCommandWithAliases(drive.EmptyTrashKey, drive.DescEmptyTrash, &emptyTrashCmd{}, []string{})
 	bindCommandWithAliases(drive.FeaturesKey, drive.DescFeatures, &featuresCmd{}, []string{})
 	bindCommandWithAliases(drive.InitKey, drive.DescInit, &initCmd{}, []string{})
+	bindCommandWithAliases(drive.DeInitKey, drive.DescDeInit, &deInitCmd{}, []string{})
 	bindCommandWithAliases(drive.HelpKey, drive.DescHelp, &helpCmd{}, []string{})
 
 	bindCommandWithAliases(drive.ListKey, drive.DescList, &listCmd{}, []string{})
@@ -128,6 +129,25 @@ func (cmd *initCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
 
 func (cmd *initCmd) Run(args []string) {
 	exitWithError(drive.New(initContext(args), nil).Init())
+}
+
+type deInitCmd struct {
+	noPrompt *bool
+}
+
+func (cmd *deInitCmd) Flags(fs *flag.FlagSet) *flag.FlagSet {
+	cmd.noPrompt = fs.Bool(drive.NoPromptKey, false, "disables the prompt")
+	return fs
+}
+
+func (cmd *deInitCmd) Run(args []string) {
+	_, context, path := preprocessArgsByToggle(args, true)
+	opts := &drive.Options{
+		NoPrompt: *cmd.noPrompt,
+		Path:     path,
+	}
+
+	exitWithError(drive.New(context, opts).DeInit())
 }
 
 type quotaCmd struct{}
