@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/odeke-em/drive/config"
-	"github.com/odeke-em/dts/trie"
 
 	expb "github.com/odeke-em/exponential-backoff"
 	rationer "github.com/odeke-em/rationer"
@@ -282,70 +281,10 @@ func (g *Commands) playPushChanges(cl []*Change, opMap *map[Operation]sizeCounte
 		}
 	}()
 
-	addTrie := trie.New(trie.AsciiAlphabet)
-	delTrie := trie.New(trie.AsciiAlphabet)
-	modTrie := trie.New(trie.AsciiAlphabet)
-
-	for _, c := range cl {
-		switch c.Op() {
-		case OpMod:
-			modTrie.Set(c.Path, c)
-		case OpModConflict:
-			modTrie.Set(c.Path, c)
-		case OpAdd:
-			addTrie.Set(c.Path, c)
-		case OpDelete:
-			delTrie.Set(c.Path, c)
-		}
-	}
-
-	// Schedule them
-	g.mapOnTrie(addTrie, g.remoteAdd, g.remoteLevelMkdirAll)
-	g.mapOnTrie(modTrie, g.remoteMod, g.remoteLevelMkdirAll)
-	g.mapOnTrie(delTrie, g.remoteDelete, g.remoteLevelNoop)
+	g.mapChanges(cl)
 
 	g.taskFinish()
 	return err
-}
-
-func (g *Commands) mapOnTrie(t *trie.Trie, f func(*Change) error, levelF func(string) error) {
-	// Firstly operate on directories
-	t.Tag(trie.PotentialDir, "dir")
-
-	levelApply := func(level []interface{}) {
-		if len(level) < 2 {
-			return
-		}
-		casts := func() []string {
-			strl := []string{}
-			for _, lvl := range level {
-				clCh, ok := lvl.(*Change)
-				if !ok || clCh == nil {
-					continue
-				}
-				strl = append(strl, clCh.Path)
-			}
-			return strl
-		}()
-
-		if len(casts) < 2 {
-			return
-		}
-
-		mainRoot := commonPrefixSplit("/", casts...)
-		// g.log.Logf("levels %v %v\n", mainRoot, casts)
-
-		if rootLike(mainRoot) || len(mainRoot) < 1 {
-			return
-		}
-		lErr := levelF(mainRoot)
-		if lErr != nil {
-			g.log.Logf("push: levellErr: %v\n", lErr)
-		}
-	}
-
-	walk := t.BreadthFirstWalk(levelApply)
-	g.mapChanges(walk, f)
 }
 
 func changeJobber(fn func(*Change) error, ch *Change) rationer.Job {
@@ -354,19 +293,22 @@ func changeJobber(fn func(*Change) error, ch *Change) rationer.Job {
 	}
 }
 
-func (g *Commands) mapChanges(srcChan chan interface{}, f func(*Change) error) {
+func (g *Commands) mapChanges(cl []*Change) {
 	ration := rationer.NewRationer(10)
 	loader := ration.Run()
 
-	for srcCh := range srcChan {
-		change, ok := srcCh.(*Change)
-
-		fmt.Println("ok", ok)
-		if !ok {
-			continue
+	for _, ch := range cl {
+		f := g.remoteAdd
+		switch ch.Op() {
+		case OpDelete:
+			f = g.remoteDelete
+		case OpModConflict:
+			f = g.remoteMod
+		case OpMod:
+			f = g.remoteMod
 		}
 
-		loader <- changeJobber(f, change)
+		loader <- changeJobber(f, ch)
 	}
 
 	go func(res chan interface{}) {
