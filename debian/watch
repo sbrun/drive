@@ -1,0 +1,4 @@
+version=3
+opts=uversionmangle=s/[-+]([aA-zZ]*)/~\1/ \
+https://github.com/odeke-em/drive/tags .*/v(.*).tar.gz
+

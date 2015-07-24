@@ -1,0 +1,13 @@
+Source: google-drive
+Section: misc
+Priority: optional
+Maintainer: Sophie Brun <sophie@freexian.com>
+Build-Depends: debhelper (>= 9), golang-go, dh-golang
+Standards-Version: 3.9.6
+Homepage: https://github.com/odeke-em/drive
+
+Package: google-drive
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Google Drive tool
+ This package contains a command line tool for managing data on Google drive.
